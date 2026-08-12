@@ -46,7 +46,7 @@ export class OpenCodeClient {
   readonly displayHost: string
   private readonly authHeader: string | null
   /** Remembers which of several candidate paths this server actually serves. */
-  private readonly resolvedPaths = new Map<string, string>()
+  private readonly resolvedPaths = new Map<string, number>()
 
   constructor(credentials: ServerCredentials) {
     const target = normaliseBaseUrl(credentials.url)
@@ -195,21 +195,25 @@ export class OpenCodeClient {
    * Try candidate paths in order, remembering the one that answers.
    *
    * `key` groups the candidates so the memo survives across calls with
-   * different query strings.
+   * different query strings — and different path ids. Callers must keep the
+   * candidate order stable for a given key, since the memo is positional.
    */
   private async requestFirst<T>(
     key: string,
     candidates: string[],
     options: Parameters<OpenCodeClient["request"]>[1] = {},
   ): Promise<T> {
+    // Memoise which candidate *shape* won, never the built path — candidates
+    // interpolate ids (`/session/<id>/message`), so caching the string would
+    // pin every later call to the first session it ever saw.
     const known = this.resolvedPaths.get(key)
-    if (known) return this.request<T>(known, options)
+    if (known !== undefined && candidates[known]) return this.request<T>(candidates[known]!, options)
 
     let lastError: unknown
-    for (const candidate of candidates) {
+    for (const [index, candidate] of candidates.entries()) {
       try {
         const result = await this.request<T>(candidate, options)
-        this.resolvedPaths.set(key, candidate)
+        this.resolvedPaths.set(key, index)
         return result
       } catch (error) {
         // Only a missing endpoint justifies trying the next candidate — an auth

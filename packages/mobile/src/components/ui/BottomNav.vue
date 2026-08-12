@@ -81,22 +81,15 @@ function go(tab: NavTab) {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  /* 26px below the label clears the home indicator on a device that reports no
-     inset; with a real safe area the rail's own padding handles it, so the
-     fixed part shrinks there. Desktop gets no dead space at all. */
-  padding: 17px var(--space-3) 26px;
+  /* Symmetric — clearance for the home indicator is the rail's safe-area
+     padding alone. Adding a fixed 26px on top of it stacked two gaps. */
+  padding: 14px var(--space-3);
   color: var(--text-muted);
   /* Overlap the rail's own border so the active rule replaces it. */
   border-top: 2px solid transparent;
   margin-top: -2px;
   font-family: var(--font-mono);
   font-size: 12px;
-}
-
-@media (min-width: 560px) {
-  .tabbar__tab {
-    padding-bottom: 17px;
-  }
 }
 
 .tabbar__tab--active {

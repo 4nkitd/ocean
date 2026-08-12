@@ -27,8 +27,17 @@ body,
  * `dvh` tracks the visible viewport as the bar shows and hides. The `100%`
  * above stays as the fallback for anything without dvh support.
  */
+html,
+body,
 #app {
   height: 100dvh;
+}
+
+/* The document must not be taller than the app, or the difference shows up as
+   a dead strip of page ground under the tab rail that you can scroll into. */
+html,
+body {
+  overflow: hidden;
 }
 
 html {
