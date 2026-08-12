@@ -30,7 +30,15 @@ interface. Talks to the opencode server over its HTTP API and SSE event stream.
   push — no shell endpoint required
 - Multi-server management, PWA manifest, dark Modernist design system
 
-## Running it
+## Setup
+
+To run the server the app talks to — install opencode, run it as a background
+service, protect it with basic auth, and expose it through a Cloudflare
+Tunnel — see **[docs/setup.md](docs/setup.md)**. It includes both the manual
+steps and a ready-to-paste prompt you can hand to your agent to do the whole
+setup for you.
+
+## Develop
 
 ```sh
 cd packages/mobile
@@ -39,34 +47,8 @@ npm run dev          # http://localhost:5273
 npm run build        # typecheck + production build
 ```
 
-Start a server on the machine holding your code:
+For screenshots and demos without touching a real server, run the mock:
 
 ```sh
-opencode serve --hostname 0.0.0.0 --port 4096
-```
-
-Bound to `localhost` the server is unreachable from a phone; bind to
-`0.0.0.0` or tunnel instead (Tailscale, `ssh -L`, `cloudflared`).
-
-## Deployment
-
-`scripts/deploy.sh` builds and deploys to Cloudflare Pages:
-
-```sh
-./scripts/deploy.sh
-```
-
-The `/proxy/…` route is a Pages Function that forwards requests server-side —
-it lives in `packages/mobile/functions/` and works in local dev via the vite
-dev server too.
-
-## Layout
-
-```
-packages/mobile/
-  src/api/        HTTP client, types, error kinds
-  src/stores/     connection, sessions, projects, files, git
-  src/views/      one file per screen
-  src/components/ shared UI, chat, files, git, projects
-  functions/      Cloudflare Pages relay function
+node scripts/mock-server.mjs   # fake opencode server on 127.0.0.1:4599
 ```
