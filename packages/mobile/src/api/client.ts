@@ -10,6 +10,7 @@ import type {
   GitCommitDetail,
   GitCommitFile,
   FsEntry,
+  McpServer,
   MessageWithParts,
   ModelInfo,
   ModelRef,
@@ -804,6 +805,50 @@ export class OpenCodeClient {
       body: { model },
       optional: true,
     }).catch(() => undefined)
+  }
+
+  // ── mcp ─────────────────────────────────────────────────────────────────
+
+  /**
+   * The MCP servers this opencode process knows about, with their live state.
+   *
+   * `null` — not an empty list — when the server has no `/mcp` endpoint at all,
+   * so the UI can say "this build cannot do it" rather than "none configured",
+   * which are very different answers.
+   */
+  async listMcp(directory?: string, signal?: AbortSignal): Promise<McpServer[] | null> {
+    const result = await this.request<Record<string, { status?: string; error?: string }>>("/mcp", {
+      query: { directory },
+      signal,
+      optional: true,
+    })
+    if (!result || typeof result !== "object" || Array.isArray(result)) return null
+    return Object.entries(result)
+      .map(([name, value]) => ({
+        name,
+        status: (value?.status === "connected" || value?.status === "failed"
+          ? value.status
+          : "disabled") as McpServer["status"],
+        error: typeof value?.error === "string" ? value.error : undefined,
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name))
+  }
+
+  /**
+   * Connect or disconnect one MCP server.
+   *
+   * This is the running process's state, not its config file — a disabled
+   * server comes back on restart. The UI says so rather than implying it is
+   * saved somewhere.
+   */
+  async setMcpEnabled(name: string, enabled: boolean, directory?: string): Promise<void> {
+    const action = enabled ? "connect" : "disconnect"
+    await this.request(`/mcp/${encodeURIComponent(name)}/${action}`, {
+      method: "POST",
+      query: { directory },
+      // Connecting a remote server can take a while to hand-shake.
+      timeoutMs: 60_000,
+    })
   }
 
   // ── events ──────────────────────────────────────────────────────────────

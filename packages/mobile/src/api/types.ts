@@ -339,6 +339,19 @@ export interface ModelInfo {
   status?: string
 }
 
+/**
+ * One MCP server the opencode process knows about.
+ *
+ * `GET /mcp` returns a map of name to status; this is that flattened, because
+ * every screen wants a list. `failed` carries the reason — it is a server the
+ * user meant to run, so the error is the whole story.
+ */
+export interface McpServer {
+  name: string
+  status: "connected" | "disabled" | "failed"
+  error?: string
+}
+
 /** What a session is running under, mirroring the server's `Model.Ref`. */
 export interface ModelRef {
   providerID: string

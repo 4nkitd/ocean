@@ -27,6 +27,7 @@ import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
 import StateBlock from "@/components/ui/StateBlock.vue"
 import MessageBubble from "@/components/chat/MessageBubble.vue"
 import ModelAgentSheet from "@/components/chat/ModelAgentSheet.vue"
+import McpSheet from "@/components/mcp/McpSheet.vue"
 import PromptComposer from "@/components/chat/PromptComposer.vue"
 
 const route = useRoute()
@@ -73,6 +74,7 @@ const {
 // ── agent / model selector ─────────────────────────────────────────────────
 
 const sheetOpen = ref(false)
+const mcpOpen = ref(false)
 
 /** `build · deepseek-v4-flash` — the composer's one-line summary. */
 const selectorLabel = computed(() => {
@@ -474,16 +476,30 @@ watch(
           </button>
         </div>
 
-        <button
-          type="button"
-          class="selector"
-          :aria-label="'Agent and model: ' + selectorLabel"
-          @click="sheetOpen = true"
-        >
-          <AppIcon name="git-branch" :size="13" class="selector__icon" />
-          <span class="selector__label">{{ selectorLabel }}</span>
-          <AppIcon name="chevron-up-down" :size="14" class="selector__chevron" />
-        </button>
+        <div class="selectors">
+          <button
+            type="button"
+            class="selector"
+            :aria-label="'Agent and model: ' + selectorLabel"
+            @click="sheetOpen = true"
+          >
+            <AppIcon name="git-branch" :size="13" class="selector__icon" />
+            <span class="selector__label">{{ selectorLabel }}</span>
+            <AppIcon name="chevron-up-down" :size="14" class="selector__chevron" />
+          </button>
+
+          <!-- Desktop reaches MCP through the workspace tab instead. -->
+          <button
+            v-if="!isDesktop"
+            type="button"
+            class="selectors__settings"
+            aria-label="MCP servers"
+            title="MCP servers"
+            @click="mcpOpen = true"
+          >
+            <AppIcon name="gear" :size="15" />
+          </button>
+        </div>
 
         <PromptComposer
           :sending="sending"
@@ -503,6 +519,8 @@ watch(
           @change="onSheetChange"
           @agent-change="onAgentChange"
         />
+
+        <McpSheet v-if="mcpOpen" :directory="directory" @close="mcpOpen = false" />
       </template>
 
       <BottomNav class="screen__bottom" :tabs="tabs" active="chat" />
@@ -677,8 +695,15 @@ watch(
   background: var(--surface-sunken);
 }
 
-.selector {
+.selectors {
   flex: none;
+  display: flex;
+  align-items: stretch;
+  background: var(--surface);
+}
+
+.selector {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -687,6 +712,18 @@ watch(
   background: var(--surface);
   text-align: left;
   color: var(--text-muted);
+}
+
+.selectors__settings {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 8px var(--space-5) 0;
+  color: var(--text-muted);
+}
+
+.selectors__settings:active {
+  background: var(--surface-raised);
 }
 
 .selector:active {

@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue"
 import type { FileStatus, GitCommit } from "@/api/types"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import GitCommitRow from "@/components/git/GitCommitRow.vue"
+import McpList from "@/components/mcp/McpList.vue"
 import TypeBadge from "@/components/ui/TypeBadge.vue"
 import { basename, relativeTo } from "@/lib/format"
 import { formatChangeCounts } from "@/lib/diff"
@@ -21,7 +22,7 @@ const emit = defineEmits<{
   openGit: []
 }>()
 
-const activePanel = ref<"files" | "git">("git")
+const activePanel = ref<"files" | "git" | "mcp">("git")
 const gitTab = ref<"changes" | "history">("changes")
 const fileTree = useFileTree(props.directory)
 const git = useGit(props.directory)
@@ -116,6 +117,17 @@ onMounted(() => {
           <span>Git</span>
           <span v-if="changedFiles.length" class="workspace__badge">{{ changedFiles.length }}</span>
         </button>
+        <button
+          type="button"
+          class="workspace__tab"
+          :class="{ 'workspace__tab--active': activePanel === 'mcp' }"
+          :aria-selected="activePanel === 'mcp'"
+          role="tab"
+          @click="activePanel = 'mcp'"
+        >
+          <AppIcon name="gear" :size="14" />
+          <span>MCP</span>
+        </button>
       </div>
       <button
         type="button"
@@ -171,7 +183,7 @@ onMounted(() => {
       </div>
     </template>
 
-    <template v-else>
+    <template v-else-if="activePanel === 'git'">
       <div v-if="!isRepo" class="workspace__state">This directory is not a Git repository.</div>
 
       <template v-else>
@@ -268,6 +280,10 @@ onMounted(() => {
         </div>
       </template>
     </template>
+
+    <div v-else class="scroll-y workspace__body">
+      <McpList :directory="directory" />
+    </div>
   </aside>
 </template>
 
