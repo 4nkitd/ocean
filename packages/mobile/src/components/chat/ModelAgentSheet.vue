@@ -42,6 +42,48 @@ function displayModel(model: ModelInfo): string {
   return model.name ?? model.id
 }
 
+/**
+ * Models grouped under the provider serving them.
+ *
+ * A server with several providers connected otherwise returns one long flat
+ * list where the same model name can appear more than once — the provider is
+ * the only thing telling those apart, and it was not shown at all.
+ */
+const modelsByProvider = computed(() => {
+  const groups = new Map<string, ModelInfo[]>()
+  for (const model of models.value) {
+    const list = groups.get(model.providerID)
+    if (list) list.push(model)
+    else groups.set(model.providerID, [model])
+  }
+  return [...groups]
+    .map(([providerID, list]) => ({
+      providerID,
+      models: [...list].sort((left, right) =>
+        displayModel(left).localeCompare(displayModel(right)),
+      ),
+    }))
+    .sort((left, right) => left.providerID.localeCompare(right.providerID))
+})
+
+/**
+ * A session with no variant chosen reports `"default"` rather than nothing, and
+ * no server lists `"default"` among a model's variants — so it has to mean the
+ * plain model row, or that row never shows as active.
+ */
+function normaliseVariant(variant: string | null | undefined): string | undefined {
+  return !variant || variant === "default" ? undefined : variant
+}
+
+/** The provider matters here: two of them can serve the same model id. */
+function isActiveModel(entry: ModelInfo, variant?: string): boolean {
+  return (
+    props.model?.providerID === entry.providerID &&
+    props.model?.modelID === entry.id &&
+    normaliseVariant(props.model?.variant) === normaliseVariant(variant)
+  )
+}
+
 async function load() {
   loading.value = true
   error.value = null
@@ -74,13 +116,7 @@ async function selectAgent(agent: string) {
 async function selectModel(model: ModelInfo, variant?: string) {
   if (busy.value) return
   const next: ModelRef = { providerID: model.providerID, modelID: model.id, variant }
-  if (
-    props.model?.providerID === next.providerID &&
-    props.model?.modelID === next.modelID &&
-    (props.model?.variant ?? undefined) === (next.variant ?? undefined)
-  ) {
-    return
-  }
+  if (isActiveModel(model, variant)) return
   busy.value = true
   try {
     await requireClient().switchModel(props.sessionId, next, props.directory)
@@ -159,41 +195,38 @@ onMounted(() => {
             <p v-if="models.length === 0" class="note">
               No models to choose from — the server's default is used.
             </p>
-            <div v-for="entry in models" :key="`${entry.providerID}:${entry.id}`" class="model">
-              <button
-                type="button"
-                class="row row--model"
-                :class="{ 'row--active': entry.id === model?.modelID && !model?.variant }"
-                :aria-current="entry.id === model?.modelID && !model?.variant ? 'true' : undefined"
-                :disabled="busy"
-                @click="selectModel(entry)"
-              >
-                <span class="row__body">
-                  <span class="row__name">{{ displayModel(entry) }}</span>
-                  <span v-if="entry.family" class="row__desc mono">{{ entry.id }}</span>
-                </span>
-                <span
-                  v-if="entry.id === model?.modelID && !model?.variant"
-                  class="row__check"
-                  aria-hidden="true"
-                  >✓</span
-                >
-              </button>
+            <div v-for="provider in modelsByProvider" :key="provider.providerID" class="provider">
+              <h4 class="label provider__title">{{ provider.providerID }}</h4>
 
-              <div v-if="entry.variants && entry.variants.length" class="variants">
+              <div v-for="entry in provider.models" :key="entry.id" class="model">
                 <button
-                  v-for="variant in entry.variants"
-                  :key="variant"
                   type="button"
-                  class="variant"
-                  :class="{
-                    'variant--active': entry.id === model?.modelID && model?.variant === variant,
-                  }"
+                  class="row row--model"
+                  :class="{ 'row--active': isActiveModel(entry) }"
+                  :aria-current="isActiveModel(entry) ? 'true' : undefined"
                   :disabled="busy"
-                  @click="selectModel(entry, variant)"
+                  @click="selectModel(entry)"
                 >
-                  {{ variant }}
+                  <span class="row__body">
+                    <span class="row__name">{{ displayModel(entry) }}</span>
+                    <span v-if="entry.family" class="row__desc mono">{{ entry.id }}</span>
+                  </span>
+                  <span v-if="isActiveModel(entry)" class="row__check" aria-hidden="true">✓</span>
                 </button>
+
+                <div v-if="entry.variants && entry.variants.length" class="variants">
+                  <button
+                    v-for="variant in entry.variants"
+                    :key="variant"
+                    type="button"
+                    class="variant"
+                    :class="{ 'variant--active': isActiveModel(entry, variant) }"
+                    :disabled="busy"
+                    @click="selectModel(entry, variant)"
+                  >
+                    {{ variant }}
+                  </button>
+                </div>
               </div>
             </div>
           </section>
@@ -323,7 +356,20 @@ onMounted(() => {
   color: var(--accent-500);
 }
 
-.model:last-child .row--model {
+/* Sticky so the provider stays named while you scroll its models past it. */
+.provider__title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 9px var(--space-5) 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule-hair);
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.provider:last-child .model:last-child .row--model {
   border-bottom: none;
 }
 
