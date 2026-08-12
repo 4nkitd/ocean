@@ -21,6 +21,7 @@ const emit = defineEmits<{
 }>()
 
 const activePanel = ref<"files" | "git">("git")
+const gitTab = ref<"changes" | "history">("changes")
 const fileTree = useFileTree(props.directory)
 const git = useGit(props.directory)
 const { rows, loading: filesLoading, error: filesError, query, setFilter, toggle } = fileTree
@@ -36,6 +37,21 @@ const {
 } = git
 
 const changedFiles = computed(() => status.value?.files ?? [])
+
+const changeTotals = computed(() => {
+  let added = 0
+  let removed = 0
+  for (const file of changedFiles.value) {
+    added += file.added ?? 0
+    removed += file.removed ?? 0
+  }
+  return { added, removed }
+})
+
+function selectGitTab(tab: "changes" | "history"): void {
+  gitTab.value = tab
+  if (tab === "history") void refreshCommits()
+}
 
 function openFile(file: string): void {
   emit("openFile", file)
@@ -152,66 +168,95 @@ onMounted(() => {
     </template>
 
     <template v-else>
-      <div class="scroll-y workspace__body workspace__git">
-        <div v-if="!isRepo" class="workspace__state">This directory is not a Git repository.</div>
-        <template v-else>
-          <div class="git-head">
-            <div class="git-head__branch">
-              <AppIcon name="git-branch" :size="14" /> {{ status?.branch ?? "working tree" }}
-            </div>
-            <div class="git-head__meta">↑{{ status?.ahead ?? 0 }} · ↓{{ status?.behind ?? 0 }}</div>
-          </div>
+      <div v-if="!isRepo" class="workspace__state">This directory is not a Git repository.</div>
 
-          <div v-if="statusLoading && !status" class="workspace__state">Reading Git status…</div>
-          <div v-else-if="statusError" class="workspace__state workspace__state--error">
-            {{ statusError }}
+      <template v-else>
+        <div class="git-head">
+          <div class="git-head__branch">
+            <AppIcon name="git-branch" :size="14" /> {{ status?.branch ?? "working tree" }}
           </div>
-          <template v-else>
-            <div class="workspace__section-head">
-              <span class="label">Changes</span>
-              <span class="workspace__muted">{{ changedFiles.length }}</span>
+          <div class="git-head__meta">↑{{ status?.ahead ?? 0 }} · ↓{{ status?.behind ?? 0 }}</div>
+        </div>
+
+        <div class="git-tabs" role="tablist" aria-label="Git views">
+          <button
+            type="button"
+            class="git-tab"
+            :class="{ 'git-tab--active': gitTab === 'changes' }"
+            role="tab"
+            :aria-selected="gitTab === 'changes'"
+            @click="selectGitTab('changes')"
+          >
+            Changes
+            <span class="git-tab__count">({{ changedFiles.length }})</span>
+          </button>
+          <button
+            type="button"
+            class="git-tab"
+            :class="{ 'git-tab--active': gitTab === 'history' }"
+            role="tab"
+            :aria-selected="gitTab === 'history'"
+            @click="selectGitTab('history')"
+          >
+            History
+          </button>
+        </div>
+
+        <div class="scroll-y workspace__body workspace__git">
+          <template v-if="gitTab === 'changes'">
+            <div v-if="statusLoading && !status" class="workspace__state">Reading Git status…</div>
+            <div v-else-if="statusError" class="workspace__state workspace__state--error">
+              {{ statusError }}
             </div>
-            <div v-if="changedFiles.length === 0" class="workspace__state workspace__state--small">
-              Clean working tree
-            </div>
-            <button
-              v-for="file in changedFiles"
-              v-else
-              :key="file.path"
-              type="button"
-              class="change-row"
-              @click="openDiff(file)"
-            >
-              <span class="change-row__letter" :class="`change-row__letter--${file.status}`">{{
-                fileLetter(file.status)
-              }}</span>
-              <span class="change-row__body">
-                <span class="change-row__name">{{ basename(fileRelative(file)) }}</span>
-                <span class="change-row__path">{{ fileRelative(file) }}</span>
-              </span>
-              <span class="change-row__counts">{{ fileCounts(file) }}</span>
-            </button>
+            <template v-else>
+              <div v-if="changedFiles.length" class="git-summary">
+                <span class="git-summary__label">Working tree</span>
+                <span class="git-summary__counts">
+                  <span class="git-summary__added">+{{ changeTotals.added }}</span>
+                  <span class="git-summary__removed">−{{ changeTotals.removed }}</span>
+                </span>
+              </div>
+              <div
+                v-if="changedFiles.length === 0"
+                class="workspace__state workspace__state--small"
+              >
+                Clean working tree
+              </div>
+              <button
+                v-for="file in changedFiles"
+                v-else
+                :key="file.path"
+                type="button"
+                class="change-row"
+                @click="openDiff(file)"
+              >
+                <span class="change-row__letter" :class="`change-row__letter--${file.status}`">{{
+                  fileLetter(file.status)
+                }}</span>
+                <span class="change-row__body">
+                  <span class="change-row__name">{{ basename(fileRelative(file)) }}</span>
+                  <span class="change-row__path">{{ fileRelative(file) }}</span>
+                </span>
+                <span class="change-row__counts">{{ fileCounts(file) }}</span>
+              </button>
+            </template>
           </template>
 
-          <div v-if="commits.length" class="workspace__history">
-            <div class="workspace__section-head">
-              <span class="label">Recent commits</span>
-              <span class="workspace__muted">{{ commits.length }}</span>
+          <template v-else>
+            <div v-if="commitsLoading && !commits.length" class="workspace__state">
+              Reading history…
             </div>
-            <GitCommitRow
-              v-for="commit in commits.slice(0, 3)"
-              :key="commit.hash"
-              :commit="commit"
-            />
-          </div>
-          <div v-else-if="commitsLoading" class="workspace__state workspace__state--small">
-            Reading history…
-          </div>
-          <div v-else-if="commitsError" class="workspace__state workspace__state--small">
-            History unavailable
-          </div>
-        </template>
-      </div>
+            <div
+              v-else-if="commitsError && !commits.length"
+              class="workspace__state workspace__state--error"
+            >
+              History unavailable
+            </div>
+            <div v-else-if="!commits.length" class="workspace__state">No commits yet</div>
+            <GitCommitRow v-for="commit in commits" v-else :key="commit.hash" :commit="commit" />
+          </template>
+        </div>
+      </template>
     </template>
   </aside>
 </template>
@@ -268,8 +313,7 @@ onMounted(() => {
   color: var(--text-faint);
 }
 
-.workspace__badge,
-.workspace__muted {
+.workspace__badge {
   color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: 10px;
@@ -411,11 +455,67 @@ onMounted(() => {
   font-size: 10px;
 }
 
-.workspace__section-head {
+.git-tabs {
+  flex: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--rule);
+}
+
+.git-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 38px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.git-tab--active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+
+.git-tab__count {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.git-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px 7px;
+  gap: 8px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.git-summary__label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.git-summary__counts {
+  display: flex;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.git-summary__added {
+  color: var(--accent-400);
+}
+
+.git-summary__removed {
+  color: var(--accent-500);
 }
 
 .change-row {
@@ -479,12 +579,7 @@ onMounted(() => {
   flex: none;
 }
 
-.workspace__history {
-  margin-top: 8px;
-  border-top: 1px solid var(--rule);
-}
-
-.workspace__history :deep(.row) {
+.workspace__git :deep(.row) {
   padding-left: 14px;
   padding-right: 12px;
 }

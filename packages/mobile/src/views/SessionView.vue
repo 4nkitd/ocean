@@ -14,8 +14,10 @@ import { useRoute, useRouter } from "vue-router"
 import { toUserMessage } from "@/api/errors"
 import type { ModelRef } from "@/api/types"
 import DesktopSessionSidebar from "@/components/desktop/DesktopSessionSidebar.vue"
+import DesktopFilePreview from "@/components/desktop/DesktopFilePreview.vue"
 import DesktopWorkspacePanel from "@/components/desktop/DesktopWorkspacePanel.vue"
-import { compactNumber } from "@/lib/format"
+import TypeBadge from "@/components/ui/TypeBadge.vue"
+import { basename, compactNumber } from "@/lib/format"
 import { decodePathParam, encodePathParam } from "@/router"
 import { connection, isDirectoryGitRepo, requireClient } from "@/stores/connection"
 import { useSession } from "@/stores/session"
@@ -37,6 +39,10 @@ const sessionId = computed(() =>
 )
 const projectPath = computed(() => `/p/${encodePathParam(directory.value)}`)
 const streamConnected = connection.streamConnected
+
+type DesktopFileTab = { path: string; name: string }
+const desktopTabs = ref<DesktopFileTab[]>([])
+const activeDesktopTab = ref("chat")
 
 const {
   messages,
@@ -187,7 +193,38 @@ function onSend(text: string): void {
 function openFile(path: string): void {
   const root = directory.value.replace(/\/+$/, "")
   const absolute = path.startsWith("/") ? path : `${root}/${path}`
+  if (isDesktopViewport()) {
+    openDesktopFile(absolute)
+    return
+  }
   void router.push(`${projectPath.value}/file/${encodePathParam(absolute)}`)
+}
+
+function openDesktopFile(path: string): void {
+  const root = directory.value.replace(/\/+$/, "")
+  const absolute = path.startsWith("/") ? path : `${root}/${path}`
+  if (!desktopTabs.value.some((tab) => tab.path === absolute)) {
+    desktopTabs.value.push({ path: absolute, name: basename(absolute) })
+  }
+  activeDesktopTab.value = absolute
+  sheetOpen.value = false
+}
+
+function isDesktopViewport(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(min-width: 1080px)").matches
+}
+
+function selectDesktopTab(path: string): void {
+  activeDesktopTab.value = path
+}
+
+function closeDesktopFile(path: string): void {
+  const index = desktopTabs.value.findIndex((tab) => tab.path === path)
+  if (index === -1) return
+  desktopTabs.value.splice(index, 1)
+  if (activeDesktopTab.value !== path) return
+  activeDesktopTab.value =
+    desktopTabs.value[index - 1]?.path ?? desktopTabs.value[index]?.path ?? "chat"
 }
 
 function openSiblingSession(id: string): void {
@@ -199,10 +236,14 @@ function openWorkspaceGit(): void {
 }
 
 function openWorkspaceFile(path: string): void {
-  void router.push(`${projectPath.value}/file/${encodePathParam(path)}`)
+  openDesktopFile(path)
 }
 
 function openWorkspaceDiff(path: string): void {
+  if (isDesktopViewport()) {
+    openDesktopFile(path)
+    return
+  }
   void router.push(`${projectPath.value}/git/diff/${encodePathParam(path)}`)
 }
 
@@ -296,76 +337,117 @@ watch(
 
       <p v-if="createError" class="head__error" role="alert">{{ createError }}</p>
 
-      <div class="body">
-        <div ref="scroller" class="transcript scroll-y" @scroll.passive="onScroll">
-          <div v-if="loading && messages.length" class="transcript__sync" role="status">
-            <AppIcon name="spinner" :size="14" class="transcript__sync-spin" />
-            <span>Syncing conversation…</span>
-          </div>
-          <StateBlock
-            v-if="loading && messages.length === 0"
-            variant="loading"
-            label="Session"
-            message="Loading this conversation…"
-          />
-          <StateBlock
-            v-else-if="error"
-            variant="error"
-            label="Session"
-            :message="error"
-            @retry="reload"
-          />
-          <StateBlock
-            v-else-if="messages.length === 0"
-            variant="empty"
-            message="No messages yet — ask something about this repo"
-          />
-          <div v-else class="turns" aria-live="polite" :aria-busy="loading || isStreaming">
-            <MessageBubble
-              v-for="message in messages"
-              :key="message.info.id"
-              :message="message"
-              @open="openFile"
-              @retry="retry"
+      <nav v-if="desktopTabs.length" class="desktop-tabs" aria-label="Open workspace tabs">
+        <button
+          type="button"
+          class="desktop-tab"
+          :class="{ 'desktop-tab--active': activeDesktopTab === 'chat' }"
+          @click="selectDesktopTab('chat')"
+        >
+          <AppIcon name="chat" :size="14" />
+          <span>Chat</span>
+        </button>
+        <div v-for="tab in desktopTabs" :key="tab.path" class="desktop-tab-group">
+          <button
+            type="button"
+            class="desktop-tab"
+            :class="{ 'desktop-tab--active': activeDesktopTab === tab.path }"
+            @click="selectDesktopTab(tab.path)"
+          >
+            <TypeBadge :filename="tab.name" :size="16" />
+            <span>{{ tab.name }}</span>
+          </button>
+          <button
+            type="button"
+            class="desktop-tab__close"
+            :aria-label="`Close ${tab.name}`"
+            @click="closeDesktopFile(tab.path)"
+          >
+            <AppIcon name="close" :size="12" />
+          </button>
+        </div>
+      </nav>
+
+      <DesktopFilePreview
+        v-if="activeDesktopTab !== 'chat'"
+        :key="activeDesktopTab"
+        :directory="directory"
+        :path="activeDesktopTab"
+        @close="closeDesktopFile(activeDesktopTab)"
+      />
+
+      <template v-else>
+        <div class="body">
+          <div ref="scroller" class="transcript scroll-y" @scroll.passive="onScroll">
+            <div v-if="loading && messages.length" class="transcript__sync" role="status">
+              <AppIcon name="spinner" :size="14" class="transcript__sync-spin" />
+              <span>Syncing conversation…</span>
+            </div>
+            <StateBlock
+              v-if="loading && messages.length === 0"
+              variant="loading"
+              label="Session"
+              message="Loading this conversation…"
             />
+            <StateBlock
+              v-else-if="error"
+              variant="error"
+              label="Session"
+              :message="error"
+              @retry="reload"
+            />
+            <StateBlock
+              v-else-if="messages.length === 0"
+              variant="empty"
+              message="No messages yet — ask something about this repo"
+            />
+            <div v-else class="turns" aria-live="polite" :aria-busy="loading || isStreaming">
+              <MessageBubble
+                v-for="message in messages"
+                :key="message.info.id"
+                :message="message"
+                @open="openFile"
+                @retry="retry"
+              />
+            </div>
           </div>
+
+          <button v-if="showJump" type="button" class="jump" @click="scrollToBottom(true)">
+            <span>Jump to latest</span>
+            <AppIcon name="chevron-down" :size="14" />
+          </button>
         </div>
 
-        <button v-if="showJump" type="button" class="jump" @click="scrollToBottom(true)">
-          <span>Jump to latest</span>
-          <AppIcon name="chevron-down" :size="14" />
+        <button
+          type="button"
+          class="selector"
+          :aria-label="'Agent and model: ' + selectorLabel"
+          @click="sheetOpen = true"
+        >
+          <AppIcon name="git-branch" :size="13" class="selector__icon" />
+          <span class="selector__label">{{ selectorLabel }}</span>
+          <AppIcon name="chevron-up-down" :size="14" class="selector__chevron" />
         </button>
-      </div>
 
-      <button
-        type="button"
-        class="selector"
-        :aria-label="'Agent and model: ' + selectorLabel"
-        @click="sheetOpen = true"
-      >
-        <AppIcon name="git-branch" :size="13" class="selector__icon" />
-        <span class="selector__label">{{ selectorLabel }}</span>
-        <AppIcon name="chevron-up-down" :size="14" class="selector__chevron" />
-      </button>
+        <PromptComposer
+          :sending="sending"
+          :streaming="isStreaming"
+          :disabled="loading || !!error || isStreaming"
+          @send="onSend"
+          @abort="abort"
+        />
 
-      <PromptComposer
-        :sending="sending"
-        :streaming="isStreaming"
-        :disabled="loading || !!error || isStreaming"
-        @send="onSend"
-        @abort="abort"
-      />
-
-      <ModelAgentSheet
-        v-if="sheetOpen"
-        :directory="directory"
-        :session-id="sessionId"
-        :agent="agent"
-        :model="model"
-        @close="sheetOpen = false"
-        @change="onSheetChange"
-        @agent-change="onAgentChange"
-      />
+        <ModelAgentSheet
+          v-if="sheetOpen"
+          :directory="directory"
+          :session-id="sessionId"
+          :agent="agent"
+          :model="model"
+          @close="sheetOpen = false"
+          @change="onSheetChange"
+          @agent-change="onAgentChange"
+        />
+      </template>
 
       <BottomNav class="screen__bottom" :tabs="tabs" active="chat" />
     </div>
@@ -477,6 +559,10 @@ watch(
   line-height: 1.5;
   color: var(--accent-500);
   text-wrap: pretty;
+}
+
+.desktop-tabs {
+  display: none;
 }
 
 .body {
@@ -628,6 +714,59 @@ watch(
 
   .screen__bottom {
     display: none;
+  }
+
+  .desktop-tabs {
+    flex: none;
+    display: flex;
+    align-items: stretch;
+    min-height: 38px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface-raised);
+  }
+
+  .desktop-tab-group {
+    display: flex;
+    align-items: stretch;
+    border-right: 1px solid var(--rule);
+  }
+
+  .desktop-tab {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    max-width: 180px;
+    min-width: 82px;
+    padding: 0 10px;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+
+  .desktop-tab span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .desktop-tab--active {
+    border-bottom-color: var(--accent);
+    color: var(--text);
+  }
+
+  .desktop-tab__close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    color: var(--text-dim);
+  }
+
+  .desktop-tab__close:active {
+    color: var(--text);
+    background: var(--surface-sunken);
   }
 }
 </style>

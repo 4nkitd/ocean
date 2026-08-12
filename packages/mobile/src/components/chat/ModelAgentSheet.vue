@@ -19,7 +19,11 @@ const props = defineProps<{
   model: ModelRef | null
 }>()
 
-const emit = defineEmits<{ close: []; change: [model: ModelRef | null]; agentChange: [agent: string] }>()
+const emit = defineEmits<{
+  close: []
+  change: [model: ModelRef | null]
+  agentChange: [agent: string]
+}>()
 
 const agents = ref<AgentInfo[]>([])
 const models = ref<ModelInfo[]>([])
@@ -168,7 +172,12 @@ onMounted(() => {
                   <span class="row__name">{{ displayModel(entry) }}</span>
                   <span v-if="entry.family" class="row__desc mono">{{ entry.id }}</span>
                 </span>
-                <span v-if="entry.id === model?.modelID && !model?.variant" class="row__check" aria-hidden="true">✓</span>
+                <span
+                  v-if="entry.id === model?.modelID && !model?.variant"
+                  class="row__check"
+                  aria-hidden="true"
+                  >✓</span
+                >
               </button>
 
               <div v-if="entry.variants && entry.variants.length" class="variants">
@@ -177,7 +186,9 @@ onMounted(() => {
                   :key="variant"
                   type="button"
                   class="variant"
-                  :class="{ 'variant--active': entry.id === model?.modelID && model?.variant === variant }"
+                  :class="{
+                    'variant--active': entry.id === model?.modelID && model?.variant === variant,
+                  }"
                   :disabled="busy"
                   @click="selectModel(entry, variant)"
                 >
@@ -357,6 +368,41 @@ onMounted(() => {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (min-width: 1080px) {
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+  }
+
+  .sheet {
+    width: min(520px, calc(100vw - 64px));
+    max-height: min(720px, calc(100vh - 64px));
+    border: 2px solid var(--rule);
+    border-top-color: var(--accent);
+    padding-bottom: 0;
+    box-shadow: 0 24px 70px color-mix(in srgb, #000 45%, transparent);
+    animation: pop 0.16s ease-out;
+  }
+
+  .sheet__head {
+    padding: 16px 20px 14px;
+  }
+
+  .sheet__body {
+    max-height: min(610px, calc(100vh - 154px));
+  }
+}
+
+@keyframes pop {
+  from {
+    transform: translateY(8px) scale(0.985);
+    opacity: 0;
   }
 }
 </style>
