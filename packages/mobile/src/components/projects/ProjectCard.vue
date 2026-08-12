@@ -55,7 +55,9 @@ function open() {
         <!-- The dot is the only running indicator on this screen, so it is
              labelled rather than left as decoration. -->
         <span v-if="project.running" class="card__dot" role="img" aria-label="Session running" />
-        <span class="card__time">{{ shortRelativeTime(project.lastActivity) }}</span>
+        <span class="card__time">{{
+          shortRelativeTime(project.lastActivity) || "no activity"
+        }}</span>
       </span>
     </component>
 
@@ -237,5 +239,34 @@ function open() {
 
 button.card__row:active {
   background: var(--surface-sunken);
+}
+
+/* Desktop: each row becomes a bordered tile in the grid, so the list's own
+   hairlines and the active row's overhanging rule are replaced by the box. */
+@media (min-width: 900px) {
+  .card {
+    border-bottom: none;
+    border: 2px solid var(--rule);
+    background: var(--surface);
+  }
+
+  .card--active {
+    margin-left: 0;
+    border-color: var(--accent);
+    background: var(--surface-raised);
+  }
+
+  .card:hover {
+    background: var(--surface-raised);
+  }
+
+  .card__row {
+    padding: 16px;
+  }
+
+  .card__trail {
+    justify-content: flex-start;
+    gap: 8px;
+  }
 }
 </style>

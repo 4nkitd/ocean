@@ -273,19 +273,62 @@ export class OpenCodeClient {
     return this.request<VcsInfo>("/vcs", { query: { directory }, signal, optional: true })
   }
 
+  /**
+   * Recent commits. No server build exposes a log endpoint yet, so the named
+   * ones are tried first and git's own on-disk reflog is read when they are
+   * absent — that file is plain text and every build serves it through
+   * `/file/content`.
+   */
   async getVcsCommits(directory: string, limit = 20, signal?: AbortSignal): Promise<GitCommit[]> {
-    const result = await this.requestFirst<
-      GitCommit[] | { data?: GitCommit[]; commits?: GitCommit[] }
-    >("vcs-log", ["/vcs/log", "/vcs/commits", "/vcs/history"], {
-      query: { directory, limit },
-      signal,
-    })
-    const commits = Array.isArray(result) ? result : (result?.data ?? result?.commits ?? [])
-    return commits.slice(0, limit).map((commit) => ({
-      ...commit,
-      shortHash: commit.shortHash || commit.hash.slice(0, 7),
-      refs: commit.refs ?? [],
-    }))
+    try {
+      const result = await this.requestFirst<
+        GitCommit[] | { data?: GitCommit[]; commits?: GitCommit[] }
+      >("vcs-log", ["/vcs/log", "/vcs/commits", "/vcs/history"], {
+        query: { directory, limit },
+        signal,
+      })
+      const commits = Array.isArray(result) ? result : (result?.data ?? result?.commits ?? [])
+      if (commits.length > 0) {
+        return commits.slice(0, limit).map((commit) => ({
+          ...commit,
+          shortHash: commit.shortHash || commit.hash.slice(0, 7),
+          refs: commit.refs ?? [],
+        }))
+      }
+    } catch (error) {
+      if (!(error instanceof ApiError && error.kind === "notfound")) throw error
+    }
+    return this.readReflogCommits(directory, limit, signal)
+  }
+
+  /**
+   * The branch's reflog, then HEAD's. The branch file records only what landed
+   * on that branch, so it reads as history; HEAD's also carries checkouts and
+   * is the fallback for a detached or freshly cloned worktree.
+   */
+  private async readReflogCommits(
+    directory: string,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<GitCommit[]> {
+    const root = directory.replace(/\/+$/, "")
+    const info = await this.getVcsInfo(directory, signal).catch(() => null)
+    const branch = info?.branch?.trim()
+    const candidates = [
+      branch ? `${root}/.git/logs/refs/heads/${branch}` : null,
+      `${root}/.git/logs/HEAD`,
+    ].filter((path): path is string => path !== null)
+
+    for (const path of candidates) {
+      try {
+        const file = await this.readFile(path, directory, signal)
+        const commits = parseReflog(file.content, limit)
+        if (commits.length > 0) return commits
+      } catch (error) {
+        if (error instanceof ApiError && error.kind === "aborted") throw error
+      }
+    }
+    return []
   }
 
   /**
@@ -868,6 +911,46 @@ function normaliseServerEvent(value: unknown): ServerEvent | null {
     sessionID,
     data,
   }
+}
+
+/**
+ * One reflog line is `<old> <new> <name> <email> <ts> <tz>\t<action>: <subject>`.
+ * Only the actions that create a commit are history; a checkout or a reset
+ * repeats a hash that is already in the list under its real subject.
+ */
+const REFLOG_LINE = /^([0-9a-f]{7,40}) ([0-9a-f]{7,40}) (.*?) <(.*?)> (\d+) [+-]\d{4}\t(.*)$/
+const REFLOG_COMMIT_ACTIONS = /^(commit|merge|rebase|cherry-pick|revert|am|pull)\b/
+
+function parseReflog(content: string, limit: number): GitCommit[] {
+  const commits: GitCommit[] = []
+  const seen = new Set<string>()
+
+  // Newest last on disk, newest first on screen.
+  for (const line of content.split("\n").reverse()) {
+    const match = REFLOG_LINE.exec(line.trim())
+    if (!match) continue
+
+    const [, , hash, author, , seconds, entry] = match
+    if (!hash || seen.has(hash)) continue
+
+    const separator = entry?.indexOf(": ") ?? -1
+    const action = separator === -1 ? (entry ?? "") : entry!.slice(0, separator)
+    const subject = separator === -1 ? "" : entry!.slice(separator + 2).trim()
+    if (!REFLOG_COMMIT_ACTIONS.test(action) || !subject) continue
+
+    seen.add(hash)
+    commits.push({
+      hash,
+      shortHash: hash.slice(0, 7),
+      subject,
+      author: author ?? "",
+      date: Number(seconds) * 1_000,
+      refs: [],
+    })
+    if (commits.length >= limit) break
+  }
+
+  return commits
 }
 
 function record(value: unknown): Record<string, unknown> | null {

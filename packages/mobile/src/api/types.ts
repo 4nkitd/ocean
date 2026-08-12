@@ -333,6 +333,11 @@ export interface ServerCredentials {
    * only ever makes same-origin calls.
    */
   proxy?: boolean
+  /**
+   * Keep this server — password included — in localStorage so the app attaches
+   * again without the form. Opt-in per server, because it outlives the tab.
+   */
+  remember?: boolean
 }
 
 export interface RecentServer {

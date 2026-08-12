@@ -23,6 +23,28 @@ const { loading, error, projects, refresh, move } = useProjects()
 
 const reordering = ref(false)
 const adding = ref(false)
+const query = ref("")
+
+/** A filter only earns its space once the list is long enough to need one. */
+const showFilter = computed(() => projects.value.length > 3)
+
+const visibleProjects = computed(() => {
+  const term = query.value.trim().toLowerCase()
+  if (!term) return projects.value
+  return projects.value.filter(
+    (project) =>
+      project.name.toLowerCase().includes(term) || project.displayPath.toLowerCase().includes(term),
+  )
+})
+
+const runningCount = computed(() => projects.value.filter((project) => project.running).length)
+
+const summary = computed(() => {
+  const total = projects.value.length
+  const parts = [`${total} ${total === 1 ? "project" : "projects"}`]
+  if (runningCount.value > 0) parts.push(`${runningCount.value} running`)
+  return parts.join(" · ")
+})
 
 const tabs: NavTab[] = [
   { id: "projects", label: "Projects", icon: "grid", to: "/projects" },
@@ -79,7 +101,10 @@ function chooseDirectory(path: string) {
       </div>
 
       <div class="screen__title">
-        <h1>Projects</h1>
+        <div class="screen__heading">
+          <h1>Projects</h1>
+          <p v-if="!loading && !error" class="screen__summary">{{ summary }}</p>
+        </div>
         <button
           type="button"
           class="screen__reorder"
@@ -89,6 +114,20 @@ function chooseDirectory(path: string) {
         >
           {{ reordering ? "Done" : "Reorder" }}
         </button>
+      </div>
+
+      <div v-if="showFilter" class="filter">
+        <AppIcon name="search" :size="14" class="filter__icon" />
+        <label class="sr-only" for="project-filter">Filter projects</label>
+        <input
+          id="project-filter"
+          v-model="query"
+          class="filter__input"
+          type="search"
+          placeholder="Filter projects"
+          spellcheck="false"
+          autocapitalize="off"
+        />
       </div>
     </header>
 
@@ -115,15 +154,22 @@ function chooseDirectory(path: string) {
         message="This server has not opened a project directory yet. Add one below to browse it."
       />
 
+      <StateBlock
+        v-else-if="visibleProjects.length === 0 && query"
+        variant="empty"
+        label="No matches"
+        :message="`Nothing here matches “${query}”.`"
+      />
+
       <ul v-if="!loading && !error" class="list">
         <ProjectCard
-          v-for="(project, index) in projects"
+          v-for="(project, index) in visibleProjects"
           :key="project.id"
           :project="project"
           :active="project.id === activeProjectId"
           :reordering="reordering"
           :can-move-up="index > 0"
-          :can-move-down="index < projects.length - 1"
+          :can-move-down="index < visibleProjects.length - 1"
           @select="open(project.worktree)"
           @move="move(project.id, $event)"
         />
@@ -218,6 +264,52 @@ function chooseDirectory(path: string) {
   font-size: 30px;
 }
 
+.screen__summary {
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: 0 var(--space-3);
+  border: 2px solid var(--rule);
+  background: var(--surface-raised);
+}
+
+.filter:focus-within {
+  border-color: var(--accent);
+}
+
+.filter__icon {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.filter__input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 0;
+  border: none;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text);
+  caret-color: var(--accent);
+}
+
+.filter__input::placeholder {
+  color: var(--text-dim);
+}
+
+.filter__input:focus-visible {
+  outline: none;
+}
+
 .screen__reorder {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -267,5 +359,37 @@ function chooseDirectory(path: string) {
 
 .add__label {
   font-size: 14px;
+}
+
+/* Desktop: the column becomes a card grid, and the add tile joins it as the
+   last cell rather than trailing the list as a full-width row. */
+@media (min-width: 900px) {
+  .screen__head {
+    padding-left: 28px;
+    padding-right: 28px;
+  }
+
+  .filter {
+    max-width: 420px;
+  }
+
+  .list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+    padding: 22px 28px 0;
+  }
+
+  .add {
+    width: auto;
+    min-height: 92px;
+    margin: 14px 28px 28px;
+    border: 2px dashed var(--rule);
+  }
+
+  .add:hover {
+    border-color: var(--accent);
+    color: var(--text);
+  }
 }
 </style>

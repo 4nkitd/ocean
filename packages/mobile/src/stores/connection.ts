@@ -14,6 +14,14 @@ import type { AppInfo, RecentServer, ServerCredentials, ServerEvent } from "@/ap
 
 const RECENTS_KEY = "opencode.mobile.recents"
 const SESSION_KEY = "opencode.mobile.session"
+/**
+ * Servers the user asked this device to remember, keyed by address. Unlike the
+ * recents list this holds the password too, so attaching again is one tap and
+ * survives closing the tab — which is why it is opt-in per server.
+ */
+const SAVED_KEY = "opencode.mobile.servers"
+/** Address of the remembered server to re-attach to on boot. */
+const LAST_KEY = "opencode.mobile.lastServer"
 const MAX_RECENTS = 6
 /** Steps the handshake screen renders, in the order it performs them. */
 export type HandshakeStepId = "reach" | "auth" | "version" | "repo"
@@ -161,6 +169,7 @@ export async function connect(credentials: ServerCredentials): Promise<boolean> 
     status.value = "connected"
     rememberServer(credentials, info)
     persistSession(credentials)
+    saveServer(credentials)
     connectStream()
     return true
   } catch (cause) {
@@ -195,6 +204,9 @@ export function disconnect(): void {
   authFailed.value = false
   resetSteps()
   sessionStorage.removeItem(SESSION_KEY)
+  // Detaching is deliberate, so the next boot must not silently reconnect. The
+  // saved credentials stay, so re-attaching from the recents list is one tap.
+  writeLocal(LAST_KEY, null)
 }
 
 /**
@@ -206,13 +218,66 @@ export function disconnect(): void {
  */
 export async function restoreSession(): Promise<boolean> {
   const raw = sessionStorage.getItem(SESSION_KEY)
-  if (!raw) return false
+  if (raw) {
+    try {
+      return await connect(JSON.parse(raw) as ServerCredentials)
+    } catch {
+      sessionStorage.removeItem(SESSION_KEY)
+    }
+  }
+
+  // Nothing in this tab: fall back to the server the user asked to be
+  // remembered, which is what makes a cold open skip the connect screen.
+  const saved = savedServer(readLocal<string>(LAST_KEY) ?? "")
+  if (!saved) return false
+  return connect(saved)
+}
+
+// ── remembered servers ─────────────────────────────────────────────────────
+
+function readSavedServers(): Record<string, ServerCredentials> {
+  const parsed = readLocal<Record<string, ServerCredentials>>(SAVED_KEY)
+  return parsed && typeof parsed === "object" ? parsed : {}
+}
+
+/** The stored credentials for an address, password included. */
+export function savedServer(url: string): ServerCredentials | null {
+  if (!url) return null
+  return readSavedServers()[url.trim()] ?? null
+}
+
+/**
+ * Store or drop this address depending on `remember`. Opting out has to erase
+ * what a previous opt-in wrote, or the toggle would only ever add.
+ */
+function saveServer(credentials: ServerCredentials): void {
+  const url = credentials.url.trim()
+  const servers = readSavedServers()
+  if (credentials.remember) {
+    servers[url] = { ...credentials, remember: true }
+    writeLocal(LAST_KEY, url)
+  } else {
+    delete servers[url]
+    if (readLocal<string>(LAST_KEY) === url) writeLocal(LAST_KEY, null)
+  }
+  writeLocal(SAVED_KEY, Object.keys(servers).length > 0 ? servers : null)
+}
+
+function readLocal<T>(key: string): T | null {
   try {
-    const credentials = JSON.parse(raw) as ServerCredentials
-    return await connect(credentials)
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : null
   } catch {
-    sessionStorage.removeItem(SESSION_KEY)
-    return false
+    return null
+  }
+}
+
+function writeLocal(key: string, value: unknown): void {
+  try {
+    if (value === null) localStorage.removeItem(key)
+    else localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // Private browsing refuses writes; remembering is a convenience, not state.
   }
 }
 
@@ -305,6 +370,11 @@ export function forgetServer(url: string): void {
   } catch {
     /* see above */
   }
+  // Forgetting an address has to take its saved password with it.
+  const servers = readSavedServers()
+  delete servers[url]
+  writeLocal(SAVED_KEY, Object.keys(servers).length > 0 ? servers : null)
+  if (readLocal<string>(LAST_KEY) === url) writeLocal(LAST_KEY, null)
 }
 
 /**
@@ -313,6 +383,10 @@ export function forgetServer(url: string): void {
  * the connect screen instead, because this client never stores passwords.
  */
 export async function switchServer(url: string): Promise<boolean> {
+  // A remembered server carries its own password, so it reconnects outright.
+  const stored = savedServer(url)
+  if (stored) return connect(stored)
+
   const entry = recents.value.find((item) => item.url === url)
   if (!entry) return false
   const saved = sessionStorage.getItem(`${SESSION_KEY}:password:${url}`)

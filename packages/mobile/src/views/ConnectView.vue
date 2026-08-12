@@ -20,7 +20,7 @@ import AppInput from "@/components/ui/AppInput.vue"
 import AppToggle from "@/components/ui/AppToggle.vue"
 import StateBlock from "@/components/ui/StateBlock.vue"
 import { displayPath, relativeTime } from "@/lib/format"
-import { connection, forgetServer } from "@/stores/connection"
+import { connection, forgetServer, savedServer } from "@/stores/connection"
 import { beginHandshake, lastAttempt } from "./HandshakeView.vue"
 
 const route = useRoute()
@@ -32,6 +32,10 @@ const authFailed = computed(() => connection.authFailed.value)
 
 function seedFrom(entry: Readonly<RecentServer> | undefined): ServerCredentials | null {
   if (!entry) return null
+  // A remembered address comes back whole, password and all; anything else
+  // repopulates the fields it is allowed to keep.
+  const stored = savedServer(entry.url)
+  if (stored) return stored
   return {
     url: entry.url,
     useBasicAuth: entry.useBasicAuth,
@@ -52,6 +56,7 @@ const url = ref(initial?.url ?? "")
 const useBasicAuth = ref(initial?.useBasicAuth ?? false)
 const username = ref(initial?.username ?? "")
 const useProxy = ref(initial?.proxy ?? false)
+const remember = ref(initial?.remember ?? true)
 // A rejected password is not offered back — the user is here to change it.
 const password = ref(connection.authFailed.value ? "" : (initial?.password ?? ""))
 const revealPassword = ref(false)
@@ -60,7 +65,7 @@ const passwordField = ref<InstanceType<typeof AppInput> | null>(null)
 
 /** The store's error survives navigation; editing the form retires it. */
 const errorDismissed = ref(false)
-watch([url, username, password, useBasicAuth, useProxy], () => {
+watch([url, username, password, useBasicAuth, useProxy, remember], () => {
   errorDismissed.value = true
 })
 
@@ -76,7 +81,9 @@ const canConnect = computed(
 )
 
 /** Preserved through the handshake so a deep link resumes where it was cut off. */
-const nextParam = computed(() => (typeof route.query.next === "string" ? route.query.next : undefined))
+const nextParam = computed(() =>
+  typeof route.query.next === "string" ? route.query.next : undefined,
+)
 
 onMounted(() => {
   if (authFailed.value && useBasicAuth.value) void focusPassword()
@@ -97,18 +104,21 @@ function submit(): void {
     username: useBasicAuth.value ? username.value.trim() : "",
     password: useBasicAuth.value ? password.value : "",
     proxy: useProxy.value,
+    remember: remember.value,
   })
   void router.push({ path: "/handshake", query: nextParam.value ? { next: nextParam.value } : {} })
 }
 
 function applyRecent(entry: Readonly<RecentServer>): void {
+  const stored = savedServer(entry.url)
   url.value = entry.url
-  useBasicAuth.value = entry.useBasicAuth
-  username.value = entry.username ?? ""
-  useProxy.value = entry.proxy ?? false
-  // Passwords are never stored, so an authenticated entry always needs one.
-  password.value = ""
-  if (entry.useBasicAuth) void focusPassword()
+  useBasicAuth.value = stored?.useBasicAuth ?? entry.useBasicAuth
+  username.value = stored?.username ?? entry.username ?? ""
+  useProxy.value = stored?.proxy ?? entry.proxy ?? false
+  remember.value = stored !== null
+  // A remembered server brings its password back; anything else needs one typed.
+  password.value = stored?.password ?? ""
+  if (useBasicAuth.value && !password.value) void focusPassword()
 }
 
 /** `192.168.1.24:4096` — the address without scheme, as the design lists it. */
@@ -143,8 +153,8 @@ function metaFor(entry: Readonly<RecentServer>): string {
 
       <h2 class="screen__title">Attach to a server</h2>
       <p class="screen__lede">
-        Run <span class="mono screen__cmd">opencode serve</span> on the machine holding your code, then
-        paste the address it prints.
+        Run <span class="mono screen__cmd">opencode serve</span> on the machine holding your code,
+        then paste the address it prints.
       </p>
 
       <!-- A real form so the mobile keyboard offers Go and Enter submits. -->
@@ -167,10 +177,25 @@ function metaFor(entry: Readonly<RecentServer>): string {
         />
 
         <AppToggle
+          v-model="remember"
+          class="form__proxy"
+          label="Remember this server"
+          :description="
+            remember
+              ? 'Kept in this browser, password included, and re-attached on open'
+              : 'Off — the address is typed in each time'
+          "
+        />
+
+        <AppToggle
           v-model="useProxy"
           class="form__proxy"
           label="Route through this app's relay"
-          :description="useProxy ? 'Requests go via the same-origin proxy — use when the server strips CORS headers' : 'Off — call the server directly'"
+          :description="
+            useProxy
+              ? 'Requests go via the same-origin proxy — use when the server strips CORS headers'
+              : 'Off — call the server directly'
+          "
         />
 
         <template v-if="useBasicAuth">
@@ -209,8 +234,8 @@ function metaFor(entry: Readonly<RecentServer>): string {
         <div v-else class="callout">
           <div class="label callout__kicker callout__kicker--warn">Unauthenticated</div>
           <p class="callout__body">
-            Anyone who can reach this address can read your files. Prefer auth, or bind the server to
-            localhost and tunnel.
+            Anyone who can reach this address can read your files. Prefer auth, or bind the server
+            to localhost and tunnel.
           </p>
         </div>
 
@@ -273,7 +298,8 @@ function metaFor(entry: Readonly<RecentServer>): string {
 /* No tab rail on this screen, so it absorbs the home indicator itself. */
 .screen__body {
   flex: 1;
-  padding: 24px calc(20px + var(--safe-right)) calc(22px + var(--safe-bottom)) calc(20px + var(--safe-left));
+  padding: 24px calc(20px + var(--safe-right)) calc(22px + var(--safe-bottom))
+    calc(20px + var(--safe-left));
 }
 
 .brand {

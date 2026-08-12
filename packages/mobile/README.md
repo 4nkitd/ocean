@@ -74,7 +74,12 @@ any component mounts, and the SSE stream has to outlive every screen that subscr
 
 Credentials live in `sessionStorage`, so a reload keeps you connected but closing the tab
 does not. The recent-servers list in `localStorage` records addresses and usernames only —
-**never passwords**.
+never passwords.
+
+"Remember this server" is the one exception, and it is opt-in per server: the address and
+its password are written to `localStorage` so the app re-attaches on a cold open instead of
+asking for the form again. Detaching stops the automatic re-attach; forgetting a server in
+the recents list erases its saved password. Leave it off on a shared machine.
 
 ### Endpoint drift
 
