@@ -1,0 +1,208 @@
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+/*
+ * The app is exactly as tall as the *visible* viewport, and no taller.
+ *
+ * `height: 100%` resolves against the initial containing block, which on a
+ * phone is the LARGE viewport — the height the page would have with the URL bar
+ * hidden. With the bar showing, the shell is then ~60-100px taller than what
+ * you can actually see, and both symptoms follow from that one fact:
+ *
+ *   - the bottom tab rail is pushed below the fold, so the screen looks cut off;
+ *   - every inner scroll container inherits the inflated height, so its content
+ *     fits inside it, nothing overflows, and scrolling appears to do nothing.
+ *
+ * `dvh` tracks the visible viewport as the bar shows and hides. The `100%`
+ * above stays as the fallback for anything without dvh support.
+ */
+#app {
+  height: 100dvh;
+}
+
+html {
+  /* Keep the rubber-band overscroll on iOS from exposing white behind the app. */
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  /* The app owns its own scroll containers; the document itself never scrolls. */
+  overflow: hidden;
+  overscroll-behavior: none;
+  /* Pinch and double-tap zoom are off (see the viewport meta) — touch-action
+     extends that to every gesture target so a two-finger drag inside a scroll
+     container can never trigger the browser's own zoom. */
+  touch-action: manipulation;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--accent-500);
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: var(--radius);
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+input,
+textarea {
+  border-radius: var(--radius);
+}
+
+/* Focus is themed, never the browser default — see the system readme. */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Tap highlight is handled by our own :active states. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* — scrollbars: present on desktop, unobtrusive — */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--rule);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* — shared primitives used across screens — */
+
+/* Small uppercase mono label. The system's h6 role, restated for spans. */
+.label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* Visually hidden but read by screen readers — used for headings that the
+   visual design conveys through position alone. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * Every screen is a full-height flex column inside the app shell, and every one
+ * of them needs to be allowed to SHRINK — a flex item's default `min-height`
+ * is `auto`, meaning "never smaller than my content". A screen whose content is
+ * taller than the frame therefore grows the column instead of letting the
+ * middle section scroll, which pushes the tab rail off the bottom and leaves
+ * the scroll container with nothing to scroll.
+ *
+ * Declared once here rather than in twelve scoped blocks so a new screen gets
+ * it by default. Scoped rules still win on everything else they set.
+ */
+.screen {
+  min-height: 0;
+}
+
+/* Vertical scroll region inside a screen. Momentum scrolling on iOS, and the
+   chain stops here so the page behind never moves. */
+.scroll-y {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  /* The page is zoom-locked; a container that scrolls on one axis must still
+     allow that gesture through touch-action. */
+  touch-action: pan-x pan-y;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
