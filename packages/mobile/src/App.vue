@@ -62,4 +62,10 @@ import ErrorBoundary from "@/components/ui/ErrorBoundary.vue"
     border-right: 2px solid var(--rule);
   }
 }
+
+@media (min-width: 1080px) {
+  .shell__device {
+    max-width: 1200px;
+  }
+}
 </style>

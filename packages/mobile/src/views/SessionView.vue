@@ -13,6 +13,8 @@ import { computed, nextTick, onUnmounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { toUserMessage } from "@/api/errors"
 import type { ModelRef } from "@/api/types"
+import DesktopSessionSidebar from "@/components/desktop/DesktopSessionSidebar.vue"
+import DesktopWorkspacePanel from "@/components/desktop/DesktopWorkspacePanel.vue"
 import { compactNumber } from "@/lib/format"
 import { decodePathParam, encodePathParam } from "@/router"
 import { connection, isDirectoryGitRepo, requireClient } from "@/stores/connection"
@@ -188,6 +190,22 @@ function openFile(path: string): void {
   void router.push(`${projectPath.value}/file/${encodePathParam(absolute)}`)
 }
 
+function openSiblingSession(id: string): void {
+  void router.push(`${projectPath.value}/session/${encodeURIComponent(id)}`)
+}
+
+function openWorkspaceGit(): void {
+  void router.push(`${projectPath.value}/git`)
+}
+
+function openWorkspaceFile(path: string): void {
+  void router.push(`${projectPath.value}/file/${encodePathParam(path)}`)
+}
+
+function openWorkspaceDiff(path: string): void {
+  void router.push(`${projectPath.value}/git/diff/${encodePathParam(path)}`)
+}
+
 // ── navigation ───────────────────────────────────────────────────────────
 
 /** Per-directory — the global current project is not this directory. */
@@ -220,126 +238,145 @@ watch(
 
 <template>
   <div class="screen">
-    <header class="head">
-      <button type="button" class="head__back" aria-label="Back to project" @click="goBack">
-        <AppIcon name="arrow-left" :size="18" />
+    <DesktopSessionSidebar
+      :directory="directory"
+      :current-session-id="sessionId"
+      @select="openSiblingSession"
+      @new-session="startNewSession"
+    />
+
+    <div class="screen__core">
+      <header class="head">
+        <button type="button" class="head__back" aria-label="Back to project" @click="goBack">
+          <AppIcon name="arrow-left" :size="18" />
+        </button>
+
+        <div class="head__text">
+          <h1 class="head__title">{{ title || "Session" }}</h1>
+          <p class="head__sub">{{ subtitle }}</p>
+          <p v-if="!streamConnected" class="head__stream" role="status">
+            event stream reconnecting…
+          </p>
+        </div>
+
+        <div class="head__actions">
+          <button
+            type="button"
+            class="head__action"
+            aria-label="All projects"
+            title="All projects"
+            @click="router.push('/projects')"
+          >
+            <AppIcon name="grid" :size="18" />
+          </button>
+          <button
+            type="button"
+            class="head__action"
+            aria-label="Session list — switch to another session"
+            title="Session list"
+            @click="router.push(projectPath)"
+          >
+            <AppIcon name="list" :size="18" />
+          </button>
+          <button
+            type="button"
+            class="head__action"
+            aria-label="Start a new session in this directory"
+            :disabled="creating"
+            @click="startNewSession"
+          >
+            <AppIcon
+              :name="creating ? 'spinner' : 'plus'"
+              :size="18"
+              :class="{ head__spin: creating }"
+            />
+          </button>
+        </div>
+      </header>
+
+      <p v-if="createError" class="head__error" role="alert">{{ createError }}</p>
+
+      <div class="body">
+        <div ref="scroller" class="transcript scroll-y" @scroll.passive="onScroll">
+          <div v-if="loading && messages.length" class="transcript__sync" role="status">
+            <AppIcon name="spinner" :size="14" class="transcript__sync-spin" />
+            <span>Syncing conversation…</span>
+          </div>
+          <StateBlock
+            v-if="loading && messages.length === 0"
+            variant="loading"
+            label="Session"
+            message="Loading this conversation…"
+          />
+          <StateBlock
+            v-else-if="error"
+            variant="error"
+            label="Session"
+            :message="error"
+            @retry="reload"
+          />
+          <StateBlock
+            v-else-if="messages.length === 0"
+            variant="empty"
+            message="No messages yet — ask something about this repo"
+          />
+          <div v-else class="turns" aria-live="polite" :aria-busy="loading || isStreaming">
+            <MessageBubble
+              v-for="message in messages"
+              :key="message.info.id"
+              :message="message"
+              @open="openFile"
+              @retry="retry"
+            />
+          </div>
+        </div>
+
+        <button v-if="showJump" type="button" class="jump" @click="scrollToBottom(true)">
+          <span>Jump to latest</span>
+          <AppIcon name="chevron-down" :size="14" />
+        </button>
+      </div>
+
+      <button
+        type="button"
+        class="selector"
+        :aria-label="'Agent and model: ' + selectorLabel"
+        @click="sheetOpen = true"
+      >
+        <AppIcon name="git-branch" :size="13" class="selector__icon" />
+        <span class="selector__label">{{ selectorLabel }}</span>
+        <AppIcon name="chevron-up-down" :size="14" class="selector__chevron" />
       </button>
 
-      <div class="head__text">
-        <h1 class="head__title">{{ title || "Session" }}</h1>
-        <p class="head__sub">{{ subtitle }}</p>
-        <p v-if="!streamConnected" class="head__stream" role="status">event stream reconnecting…</p>
-      </div>
+      <PromptComposer
+        :sending="sending"
+        :streaming="isStreaming"
+        :disabled="loading || !!error || isStreaming"
+        @send="onSend"
+        @abort="abort"
+      />
 
-      <div class="head__actions">
-        <button
-          type="button"
-          class="head__action"
-          aria-label="All projects"
-          title="All projects"
-          @click="router.push('/projects')"
-        >
-          <AppIcon name="grid" :size="18" />
-        </button>
-        <button
-          type="button"
-          class="head__action"
-          aria-label="Session list — switch to another session"
-          title="Session list"
-          @click="router.push(projectPath)"
-        >
-          <AppIcon name="list" :size="18" />
-        </button>
-        <button
-          type="button"
-          class="head__action"
-          aria-label="Start a new session in this directory"
-          :disabled="creating"
-          @click="startNewSession"
-        >
-          <AppIcon
-            :name="creating ? 'spinner' : 'plus'"
-            :size="18"
-            :class="{ head__spin: creating }"
-          />
-        </button>
-      </div>
-    </header>
+      <ModelAgentSheet
+        v-if="sheetOpen"
+        :directory="directory"
+        :session-id="sessionId"
+        :agent="agent"
+        :model="model"
+        @close="sheetOpen = false"
+        @change="onSheetChange"
+        @agent-change="onAgentChange"
+      />
 
-    <p v-if="createError" class="head__error" role="alert">{{ createError }}</p>
-
-    <div class="body">
-      <div ref="scroller" class="transcript scroll-y" @scroll.passive="onScroll">
-        <div v-if="loading && messages.length" class="transcript__sync" role="status">
-          <AppIcon name="spinner" :size="14" class="transcript__sync-spin" />
-          <span>Syncing conversation…</span>
-        </div>
-        <StateBlock
-          v-if="loading && messages.length === 0"
-          variant="loading"
-          label="Session"
-          message="Loading this conversation…"
-        />
-        <StateBlock
-          v-else-if="error"
-          variant="error"
-          label="Session"
-          :message="error"
-          @retry="reload"
-        />
-        <StateBlock
-          v-else-if="messages.length === 0"
-          variant="empty"
-          message="No messages yet — ask something about this repo"
-        />
-        <div v-else class="turns" aria-live="polite" :aria-busy="loading || isStreaming">
-          <MessageBubble
-            v-for="message in messages"
-            :key="message.info.id"
-            :message="message"
-            @open="openFile"
-            @retry="retry"
-          />
-        </div>
-      </div>
-
-      <button v-if="showJump" type="button" class="jump" @click="scrollToBottom(true)">
-        <span>Jump to latest</span>
-        <AppIcon name="chevron-down" :size="14" />
-      </button>
+      <BottomNav class="screen__bottom" :tabs="tabs" active="chat" />
     </div>
 
-    <button
-      type="button"
-      class="selector"
-      :aria-label="'Agent and model: ' + selectorLabel"
-      @click="sheetOpen = true"
-    >
-      <AppIcon name="git-branch" :size="13" class="selector__icon" />
-      <span class="selector__label">{{ selectorLabel }}</span>
-      <AppIcon name="chevron-up-down" :size="14" class="selector__chevron" />
-    </button>
-
-    <PromptComposer
-      :sending="sending"
-      :streaming="isStreaming"
-      :disabled="loading || !!error || isStreaming"
-      @send="onSend"
-      @abort="abort"
-    />
-
-    <ModelAgentSheet
-      v-if="sheetOpen"
+    <DesktopWorkspacePanel
       :directory="directory"
-      :session-id="sessionId"
-      :agent="agent"
-      :model="model"
-      @close="sheetOpen = false"
-      @change="onSheetChange"
-      @agent-change="onAgentChange"
+      :is-repo="isRepo"
+      @open-file="openWorkspaceFile"
+      @open-diff="openWorkspaceDiff"
+      @open-git="openWorkspaceGit"
     />
-
-    <BottomNav :tabs="tabs" active="chat" />
   </div>
 </template>
 
@@ -349,6 +386,10 @@ watch(
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+.screen__core {
+  display: contents;
 }
 
 .head {
@@ -565,6 +606,28 @@ watch(
   .selector {
     padding-left: max(20px, calc((100% - 840px) / 2));
     padding-right: max(20px, calc((100% - 840px) / 2));
+  }
+}
+
+@media (min-width: 1080px) {
+  .screen {
+    flex-direction: row;
+  }
+
+  .screen__core {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .head__back,
+  .head__actions {
+    display: none;
+  }
+
+  .screen__bottom {
+    display: none;
   }
 }
 </style>
