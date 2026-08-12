@@ -11,7 +11,7 @@
  */
 import { computed, onMounted, onUnmounted, ref } from "vue"
 import { useRoute, useRouter } from "vue-router"
-import type { OpenCodeClient } from "@/api/client"
+import { isHiddenSession, type OpenCodeClient } from "@/api/client"
 import { ApiError, toUserMessage } from "@/api/errors"
 import type { MessageWithParts, ServerEvent, Session } from "@/api/types"
 import SessionRow, { type SessionSummary } from "@/components/projects/SessionRow.vue"
@@ -152,8 +152,18 @@ function handleEvent(event: ServerEvent): void {
   const row = sessions.value.find((session) => session.id === id)
   const props = (event.data ?? event.properties ?? {}) as Record<string, unknown>
 
+  if (event.type === "session.deleted" || event.type === "session.removed") {
+    const at = sessions.value.findIndex((session) => session.id === id)
+    if (at !== -1) sessions.value.splice(at, 1)
+    return
+  }
+
   if (event.type === "session.updated") {
     const title = readString(props, "info", "title")
+    // Our own plumbing sessions and subagent children announce themselves like
+    // any other; without this they would appear here and never leave, since a
+    // row added by an event is not re-checked against the server's list.
+    if (isHiddenSession({ id, title, parentID: readString(props, "info", "parentID") })) return
     if (row) {
       if (title) row.title = title
       row.updated = Date.now()

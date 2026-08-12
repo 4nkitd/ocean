@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue"
+import { isHiddenSession } from "@/api/client"
 import type { Session, ServerEvent } from "@/api/types"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import { basename, displayPath, relativeTime } from "@/lib/format"
@@ -47,8 +48,19 @@ function handleEvent(event: ServerEvent): void {
   const id = sessionIdOf(event)
   if (!id) return
   const session = sessions.value.find((candidate) => candidate.id === id)
+
+  if (event.type === "session.deleted" || event.type === "session.removed") {
+    sessions.value = sessions.value.filter((candidate) => candidate.id !== id)
+    return
+  }
+
   if (event.type === "session.updated") {
     const title = readString(event.data ?? event.properties, "info", "title")
+    // Checked before the refetch below, not after: `listSessions` filters these
+    // out, so an unfiltered internal session would never be found and every one
+    // of its events would kick off another full reload.
+    const parentID = readString(event.data ?? event.properties, "info", "parentID")
+    if (isHiddenSession({ id, title, parentID })) return
     if (session) {
       if (title) session.title = title
       session.time.updated = Date.now()

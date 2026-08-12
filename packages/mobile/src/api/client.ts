@@ -332,6 +332,9 @@ export class OpenCodeClient {
     signal?: AbortSignal,
   ): Promise<string> {
     const session = await this.createSession(directory, INTERNAL_SESSION_TITLE, signal)
+    // Remembered before the first await, so a list refresh racing this call
+    // still knows to hide it even if the server renamed it.
+    internalSessionIds.add(session.id)
     try {
       const message = await this.request<MessageWithParts>(
         `/session/${encodeURIComponent(session.id)}/shell`,
@@ -507,9 +510,10 @@ export class OpenCodeClient {
 
   // ── sessions ────────────────────────────────────────────────────────────
 
+  /** Internal and subagent sessions are filtered here so no caller can forget. */
   async listSessions(directory?: string, signal?: AbortSignal): Promise<Session[]> {
     const result = await this.request<Session[]>("/session", { query: { directory }, signal })
-    return result ?? []
+    return (result ?? []).filter((session) => !isHiddenSession(session))
   }
 
   /** One session, including the agent and model it currently runs under. */
@@ -1042,8 +1046,39 @@ function normaliseServerEvent(value: unknown): ServerEvent | null {
 /** The throwaway session a server command runs in, named so it is recognisable. */
 const INTERNAL_SESSION_TITLE = "opencode mobile · internal"
 
+/**
+ * Ids of sessions this tab created for its own plumbing.
+ *
+ * The title alone is not enough to recognise them: some server builds ignore
+ * the title on create and mint their own ("New session — <date>"), which is
+ * exactly how these ended up looking like real, empty conversations in the
+ * list. The id is the only thing we can rely on, so we remember it.
+ */
+const internalSessionIds = new Set<string>()
+
 export function isInternalSessionTitle(title: string | undefined): boolean {
   return title?.trim() === INTERNAL_SESSION_TITLE
+}
+
+export function isInternalSessionId(id: string | undefined): boolean {
+  return !!id && internalSessionIds.has(id)
+}
+
+/**
+ * True for anything the session list has no business showing: our own plumbing
+ * sessions, and the children a `task` tool spawns for a subagent — those belong
+ * to their parent's transcript, not beside it.
+ */
+export function isHiddenSession(session: {
+  id?: string | null
+  title?: string | null
+  parentID?: string | null
+}): boolean {
+  return (
+    isInternalSessionId(session.id ?? undefined) ||
+    isInternalSessionTitle(session.title ?? undefined) ||
+    !!session.parentID
+  )
 }
 
 function isCommitHash(value: string): boolean {

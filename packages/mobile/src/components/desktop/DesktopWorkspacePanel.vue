@@ -80,7 +80,10 @@ function fileRelative(file: FileStatus): string {
 }
 
 onMounted(() => {
+  if (!props.isRepo) return
   void refreshStatus()
+  // Commit history is the expensive one — on a server without `/vcs/log` it
+  // falls back to a throwaway session, so it must not run for a plain folder.
   void refreshCommits()
 })
 </script>

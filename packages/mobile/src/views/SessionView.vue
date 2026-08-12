@@ -9,7 +9,7 @@
  * the only screen where the composer competes with the tab rail for the bottom
  * of the viewport, so it is a fixed row in the column, not an overlay.
  */
-import { computed, nextTick, onUnmounted, ref, watch } from "vue"
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { toUserMessage } from "@/api/errors"
 import type { GitCommit, ModelRef, PromptAttachment } from "@/api/types"
@@ -239,6 +239,27 @@ function isDesktopViewport(): boolean {
   return typeof window !== "undefined" && window.matchMedia("(min-width: 1080px)").matches
 }
 
+/**
+ * The desktop panes were previously hidden with CSS but still mounted, so on a
+ * phone they ran their git history fetch on every session load — and that fetch
+ * falls back to a throwaway server session, which is what littered the session
+ * list. Mounting them only when they are actually visible stops it at source.
+ */
+const isDesktop = ref(isDesktopViewport())
+let desktopQuery: MediaQueryList | null = null
+
+function onDesktopChange(event: MediaQueryListEvent): void {
+  isDesktop.value = event.matches
+}
+
+onMounted(() => {
+  desktopQuery = window.matchMedia("(min-width: 1080px)")
+  isDesktop.value = desktopQuery.matches
+  desktopQuery.addEventListener("change", onDesktopChange)
+})
+
+onUnmounted(() => desktopQuery?.removeEventListener("change", onDesktopChange))
+
 function selectDesktopTab(id: string): void {
   activeDesktopTab.value = id
 }
@@ -305,6 +326,7 @@ watch(
 <template>
   <div class="screen">
     <DesktopSessionSidebar
+      v-if="isDesktop"
       :directory="directory"
       :current-session-id="sessionId"
       @select="openSiblingSession"
@@ -487,6 +509,7 @@ watch(
     </div>
 
     <DesktopWorkspacePanel
+      v-if="isDesktop"
       :directory="directory"
       :is-repo="isRepo"
       @open-file="openWorkspaceFile"
