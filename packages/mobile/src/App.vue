@@ -65,7 +65,9 @@ import ErrorBoundary from "@/components/ui/ErrorBoundary.vue"
 
 @media (min-width: 1080px) {
   .shell__device {
-    max-width: 1200px;
+    max-width: none;
+    border-left: 0;
+    border-right: 0;
   }
 }
 </style>
