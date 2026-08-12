@@ -63,7 +63,9 @@ onUnmounted(() => pointerQuery?.removeEventListener("change", onPointerChange))
 
 // ── sending ────────────────────────────────────────────────────────────────
 
-const canSend = computed(() => !props.disabled && !props.sending && text.value.trim().length > 0)
+const canSend = computed(
+  () => !props.disabled && !props.sending && !props.streaming && text.value.trim().length > 0,
+)
 
 function submit(): void {
   if (!canSend.value) return
@@ -115,7 +117,11 @@ function onKeydown(event: KeyboardEvent): void {
       :disabled="!canSend"
       @click="submit"
     >
-      <AppIcon :name="sending ? 'spinner' : 'arrow-right'" :size="19" :class="{ 'composer__spin': sending }" />
+      <AppIcon
+        :name="sending ? 'spinner' : 'arrow-right'"
+        :size="19"
+        :class="{ composer__spin: sending }"
+      />
     </button>
   </div>
 </template>
@@ -184,6 +190,13 @@ function onKeydown(event: KeyboardEvent): void {
 
 .composer__spin {
   animation: spin 0.9s linear infinite;
+}
+
+@media (min-width: 760px) {
+  .composer {
+    padding-left: max(20px, calc((100% - 840px) / 2));
+    padding-right: max(20px, calc((100% - 840px) / 2));
+  }
 }
 
 @keyframes spin {

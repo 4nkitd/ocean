@@ -19,6 +19,7 @@ import type { CommitResult, GitFailure } from "@/stores/git"
 const props = defineProps<{
   /** Set when committing is impossible whatever the message says. */
   blockedReason: string | null
+  changeCount: number
   /**
    * False only when the server cannot run commands at all. Nothing staged is a
    * reason to refuse the commit, not a reason to stop someone drafting the
@@ -51,6 +52,11 @@ const disabledReason = computed(() => {
   if (props.blockedReason) return props.blockedReason
   if (!message.value.trim()) return "Write a commit message first."
   return null
+})
+
+const commitLabel = computed(() => {
+  if (props.changeCount === 1) return "Commit 1 change"
+  return `Commit all ${props.changeCount} changes`
 })
 
 function submit() {
@@ -95,6 +101,9 @@ function submit() {
       </AppButton>
     </div>
 
+    <div class="composer__scope">
+      <span class="label">{{ changeCount ? commitLabel : "Nothing to commit" }}</span>
+    </div>
     <form class="composer__bar" @submit.prevent="submit">
       <label class="sr-only" for="commit-message">Commit message</label>
       <input
@@ -112,9 +121,10 @@ function submit() {
         type="submit"
         class="composer__submit"
         :disabled="!!disabledReason || pending"
-        :title="disabledReason ?? 'Commit the staged files'"
-        :aria-label="disabledReason ? `Commit — ${disabledReason}` : 'Commit'"
+        :title="disabledReason ?? commitLabel"
+        :aria-label="disabledReason ? `Commit — ${disabledReason}` : commitLabel"
       >
+        <span v-if="!pending" class="composer__submit-label">Commit</span>
         <AppIcon :name="pending ? 'spinner' : 'check'" :size="20" :class="{ 'composer__spin': pending }" />
       </button>
     </form>
@@ -190,6 +200,10 @@ function submit() {
   padding: 14px var(--space-5);
 }
 
+.composer__scope {
+  padding: 12px var(--space-5) 0;
+}
+
 .composer__input {
   flex: 1;
   min-width: 0;
@@ -216,13 +230,21 @@ function submit() {
 }
 
 .composer__submit {
-  width: 52px;
+  min-width: 88px;
+  padding: 0 12px;
   flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   background: var(--accent);
   color: var(--on-accent);
+}
+
+.composer__submit-label {
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .composer__submit:active:not(:disabled) {

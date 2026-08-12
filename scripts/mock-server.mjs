@@ -150,6 +150,149 @@ const messagesFor = (sessionId, title) => {
   ]
 }
 
+const messageHistory = new Map(sessions.map((session) => [session.id, messagesFor(session.id, session.title)]))
+const eventClients = new Set()
+const activeRuns = new Map()
+let liveCounter = 0
+
+function emitEvent(event) {
+  const frame = `data: ${JSON.stringify({ directory: ROOT, payload: event })}\r\n\r\n`
+  for (const response of eventClients) response.write(frame)
+}
+
+async function readJson(req) {
+  let raw = ""
+  for await (const chunk of req) raw += chunk
+  try {
+    return JSON.parse(raw || "{}")
+  } catch {
+    return {}
+  }
+}
+
+function scheduleRun(run, delay, callback) {
+  const timer = setTimeout(() => {
+    run.timers.delete(timer)
+    if (!run.cancelled) callback()
+  }, delay)
+  run.timers.add(timer)
+}
+
+function startPrompt(session, text) {
+  const created = Date.now()
+  const suffix = `${created}_${liveCounter++}`
+  const userId = `msg_live_user_${suffix}`
+  const assistantId = `msg_live_assistant_${suffix}`
+  const reasoningId = `prt_live_reasoning_${suffix}`
+  const textId = `prt_live_text_${suffix}`
+  const user = {
+    info: {
+      id: userId,
+      sessionID: session.id,
+      role: "user",
+      time: { created },
+    },
+    parts: [
+      {
+        id: `${userId}_text`,
+        messageID: userId,
+        sessionID: session.id,
+        type: "text",
+        text,
+      },
+    ],
+  }
+  const assistant = {
+    info: {
+      id: assistantId,
+      sessionID: session.id,
+      role: "assistant",
+      time: { created: created + 40 },
+      modelID: "deepseek-v4-flash-free",
+      providerID: "opencode",
+    },
+    parts: [],
+  }
+  const reasoning = {
+    id: reasoningId,
+    messageID: assistantId,
+    sessionID: session.id,
+    type: "reasoning",
+    text: "Checking the request and preparing a response.",
+  }
+  const response = {
+    id: textId,
+    messageID: assistantId,
+    sessionID: session.id,
+    type: "text",
+    text: "",
+  }
+  assistant.parts.push(reasoning, response)
+  messageHistory.get(session.id)?.push(user, assistant)
+
+  const run = { cancelled: false, timers: new Set() }
+  activeRuns.set(session.id, run)
+  emitEvent({
+    type: "session.status",
+    properties: { sessionID: session.id, status: { type: "busy" } },
+  })
+  scheduleRun(run, 20, () => emitEvent({ type: "message.updated", properties: { info: user.info } }))
+  scheduleRun(run, 50, () =>
+    emitEvent({
+      type: "message.updated",
+      properties: { info: assistant.info },
+    }),
+  )
+  scheduleRun(run, 90, () =>
+    emitEvent({
+      type: "message.part.updated",
+      properties: { part: reasoning },
+    }),
+  )
+
+  const chunks = ["I’m checking ", "the request now. ", "The stream is working ", "and this response arrived live."]
+  chunks.forEach((chunk, index) => {
+    scheduleRun(run, 180 + index * 160, () => {
+      response.text += chunk
+      emitEvent({
+        type: "message.part.updated",
+        properties: { part: { ...response } },
+      })
+    })
+  })
+
+  scheduleRun(run, 180 + chunks.length * 160, () => {
+    assistant.info.time.completed = Date.now()
+    assistant.info.tokens = {
+      input: 80,
+      output: response.text.length,
+      reasoning: reasoning.text.length,
+    }
+    emitEvent({
+      type: "message.updated",
+      properties: { info: assistant.info },
+    })
+    emitEvent({
+      type: "session.status",
+      properties: { sessionID: session.id, status: { type: "idle" } },
+    })
+    activeRuns.delete(session.id)
+  })
+}
+
+function cancelPrompt(sessionId) {
+  const run = activeRuns.get(sessionId)
+  if (!run) return
+  run.cancelled = true
+  for (const timer of run.timers) clearTimeout(timer)
+  run.timers.clear()
+  activeRuns.delete(sessionId)
+  emitEvent({
+    type: "session.status",
+    properties: { sessionID: sessionId, status: { type: "idle" } },
+  })
+}
+
 const tree = {
   [ROOT]: [
     { path: "src/", type: "directory" },
@@ -205,6 +348,49 @@ const status = [
   { file: "src/utils/format.ts", additions: 0, deletions: 6, status: "deleted" },
 ]
 
+const commits = [
+  {
+    hash: "9a7d3f1c2b8e6d4f0a1b5c7e9d2f4a6b8c0d1e3f",
+    shortHash: "9a7d3f1",
+    subject: "Persist dark mode preference",
+    author: "Ankit Yadav",
+    date: now - 2 * HOUR,
+    refs: ["HEAD -> main"],
+  },
+  {
+    hash: "4c8b2a6e1d9f3b7c5a0e2d4f6b8c1a3e5d7f9b0c",
+    shortHash: "4c8b2a6",
+    subject: "Add theme toggle to the app header",
+    author: "Ankit Yadav",
+    date: now - 18 * HOUR,
+    refs: [],
+  },
+  {
+    hash: "7e1d5c9a3b6f8a2d4c0e7b1f5a9d3c6e8b2f4a0d",
+    shortHash: "7e1d5c9",
+    subject: "Add checkout validation coverage",
+    author: "Maya Chen",
+    date: now - 2 * 24 * HOUR,
+    refs: [],
+  },
+  {
+    hash: "2b6f0d4a8c1e5b9d3f7a2c6e0b4d8f1a5c9e3b7d",
+    shortHash: "2b6f0d4",
+    subject: "Update dependencies",
+    author: "Maya Chen",
+    date: now - 5 * 24 * HOUR,
+    refs: ["origin/main"],
+  },
+  {
+    hash: "6d3a9f1c5e7b2d8a4f0c6e1b3a5d7f9c2e4b8a0d",
+    shortHash: "6d3a9f1",
+    subject: "Create initial project structure",
+    author: "Ankit Yadav",
+    date: now - 12 * 24 * HOUR,
+    refs: [],
+  },
+]
+
 const diff = (file) => {
   const patch = `diff --git a/${file} b/${file}\nindex 0000000..1111111 100644\n--- a/${file}\n+++ b/${file}\n@@ -1,7 +1,19 @@\n import { create } from 'zustand'\n \n+const STORAGE_KEY = 'acme:theme'\n+\n export const useTheme = create<ThemeStore>((set) => ({\n-  theme: 'light',\n+  theme: (localStorage.getItem(STORAGE_KEY) as Theme) ?? 'light',\n   toggle: () =>\n-    set((s) => ({ theme: s.theme === 'light' ? 'dark' : 'light' })),\n+    set((s) => {\n+      const next = s.theme === 'light' ? 'dark' : 'light'\n+      localStorage.setItem(STORAGE_KEY, next)\n+      return { theme: next }\n+    }),\n }))\n`
   const entry = status.find((s) => s.file === file) ?? { additions: 0, deletions: 0, status: "modified" }
@@ -242,9 +428,13 @@ const server = createServer((req, res) => {
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     })
-    res.write(`data: ${JSON.stringify({ id: "evt_1", type: "server.connected", data: {} })}\n\n`)
+    eventClients.add(res)
+    res.write(`data: ${JSON.stringify({ id: "evt_1", type: "server.connected", data: {} })}\r\n\r\n`)
     const heartbeat = setInterval(() => res.write(": heartbeat\n\n"), 15_000)
-    req.on("close", () => clearInterval(heartbeat))
+    req.on("close", () => {
+      clearInterval(heartbeat)
+      eventClients.delete(res)
+    })
     return
   }
 
@@ -257,6 +447,9 @@ const server = createServer((req, res) => {
     const list = dir && dir !== ROOT ? sessions.filter((s) => s.directory === dir) : sessions
     return json(res, 200, list)
   }
+  if (path === "/session/status" && req.method === "GET") {
+    return json(res, 200, Object.fromEntries(sessions.map((session) => [session.id, { type: activeRuns.has(session.id) ? "busy" : "idle" }])))
+  }
   const sessionMatch = /^\/session\/(ses_[^/]+)$/.exec(path)
   if (sessionMatch && req.method === "GET") {
     const session = sessions.find((s) => s.id === sessionMatch[1])
@@ -266,7 +459,17 @@ const server = createServer((req, res) => {
   if (messagesMatch && req.method === "GET") {
     const session = sessions.find((s) => s.id === messagesMatch[1])
     if (!session) return json(res, 404, { error: "not found" })
-    return json(res, 200, messagesFor(session.id, session.title))
+    return json(res, 200, messageHistory.get(session.id) ?? messagesFor(session.id, session.title))
+  }
+  if (messagesMatch && req.method === "POST") {
+    const session = sessions.find((s) => s.id === messagesMatch[1])
+    if (!session) return json(res, 404, { error: "not found" })
+    void readJson(req).then((body) => {
+      const text = body?.parts?.find?.((part) => part?.type === "text")?.text ?? ""
+      startPrompt(session, String(text))
+      json(res, 200, {})
+    })
+    return
   }
   if (path === "/session" && req.method === "POST") {
     const body = JSON.parse(req.read?.() ?? "{}") ?? {}
@@ -278,6 +481,7 @@ const server = createServer((req, res) => {
   if (path === "/vcs") {
     return json(res, 200, { branch: "main", default_branch: "main", ahead: 0, behind: 2 })
   }
+  if (path === "/vcs/log") return json(res, 200, commits.slice(0, Number(q.get("limit") ?? 20)))
   if (path === "/vcs/status") return json(res, 200, status)
   if (path === "/vcs/diff") {
     const mode = q.get("mode") ?? "git"
@@ -315,6 +519,12 @@ const server = createServer((req, res) => {
   }
 
   if (path === "/command") return json(res, 200, [])
+
+  const abortMatch = /^\/session\/(ses_[^/]+)\/abort$/.exec(path)
+  if (abortMatch && req.method === "POST") {
+    cancelPrompt(abortMatch[1])
+    return json(res, 200, {})
+  }
 
   json(res, 404, { error: `no mock for ${req.method} ${path}` })
 })

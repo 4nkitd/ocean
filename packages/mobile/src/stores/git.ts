@@ -1,22 +1,9 @@
 import { onScopeDispose, ref } from "vue"
 import { ApiError, toUserMessage } from "@/api/errors"
-import type { FileChangeStatus, FileDiff, FileStatus, VcsCommitResult } from "@/api/types"
+import type { FileChangeStatus, FileDiff, FileStatus, GitCommit, VcsCommitResult } from "@/api/types"
 import { parseUnifiedDiff } from "@/lib/diff"
 import { relativeTo } from "@/lib/format"
 import { onServerEvent, requireClient } from "@/stores/connection"
-
-/**
- * Git, assembled from the server's first-class VCS endpoints.
- *
- * `/vcs` reports the branch and ahead/behind, `/vcs/status` the changed files
- * with their line counts, `/vcs/diff` the per-file patches, and `/vcs/commit`
- * and `/vcs/push` do exactly what their names say. There is no log or branch
- * list endpoint, so this store intentionally stops where the API stops — the
- * same boundary the server's own UI draws.
- *
- * One instance per screen: `useGit` is a composable, its requests share an
- * `AbortController` and it tears everything down with the effect scope.
- */
 
 /** A git operation that failed, translated into something readable. */
 export class GitOperationError extends Error {
@@ -58,9 +45,14 @@ export function useGit(directory: string) {
   const diffLoading = ref(false)
   const diffError = ref<string | null>(null)
 
+  const commits = ref<GitCommit[]>([])
+  const commitsLoading = ref(false)
+  const commitsError = ref<string | null>(null)
+
   // Late responses from a superseded refresh must not overwrite a newer one.
   let statusToken = 0
   let diffToken = 0
+  let commitsToken = 0
 
   // ── status ──────────────────────────────────────────────────────────────
 
@@ -108,6 +100,22 @@ export function useGit(directory: string) {
       diffError.value = toUserMessage(error)
     } finally {
       if (token === diffToken) diffLoading.value = false
+    }
+  }
+
+  async function refreshCommits(limit = 20): Promise<void> {
+    const token = ++commitsToken
+    commitsLoading.value = true
+    commitsError.value = null
+    try {
+      const result = await requireClient().getVcsCommits(directory, limit, signal)
+      if (token !== commitsToken) return
+      commits.value = result
+    } catch (error) {
+      if (isAborted(error) || token !== commitsToken) return
+      commitsError.value = toUserMessage(error)
+    } finally {
+      if (token === commitsToken) commitsLoading.value = false
     }
   }
 
@@ -207,8 +215,12 @@ export function useGit(directory: string) {
     diff,
     diffLoading,
     diffError,
+    commits,
+    commitsLoading,
+    commitsError,
     refreshStatus,
     refreshDiff,
+    refreshCommits,
     commit,
     push,
   }

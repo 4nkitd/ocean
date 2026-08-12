@@ -82,16 +82,13 @@ Endpoints moved between server versions. Rather than detecting a version and bra
 `OpenCodeClient.requestFirst` tries each known path for an operation and remembers which one
 answered, so the cost is paid once per connection. Screens never branch on server version.
 
-### Git is partly a shell
+### Git capabilities
 
-The server has no first-class git API. Working-tree status comes from `/file/status`, which
-every build serves, and diffs come from `/file/content` returning a patch. Branch, log,
-commit and push have no such endpoint and go through `client.runCommand`.
-
-Not every build exposes command execution. When it does not, `runCommand` throws `ApiError`
-with `kind: "unsupported"` and the Git screens degrade deliberately: the file lists still
-render from `/file/status`, and commit, push, log and branches are disabled with the reason
-stated on screen. That degradation is a designed state, not an error path.
+Working-tree status, diffs, commit, and push use the server's VCS endpoints. The Git tab's
+Recent commits mode requests `/vcs/log`, with `/vcs/commits` and `/vcs/history` accepted for
+server builds that use a different path. The public OpenCode server does not currently
+expose a history endpoint, so the mode shows an explicit unavailable state until one is
+available rather than pretending the repository is empty.
 
 ### The design system
 

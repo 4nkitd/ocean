@@ -69,7 +69,10 @@ export const isGitRepo = computed(() => appInfo.value?.git === true)
  * The authoritative answer for a directory is `GET /vcs`, so screens that gate
  * the Git tab on it resolve it per-directory.
  */
-export async function isDirectoryGitRepo(directory: string, signal?: AbortSignal): Promise<boolean> {
+export async function isDirectoryGitRepo(
+  directory: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
   if (!client.value) return false
   try {
     const info = await client.value.getVcsInfo(directory, signal)
@@ -82,7 +85,9 @@ export async function isDirectoryGitRepo(directory: string, signal?: AbortSignal
 /** `192.168.1.24:4096 · ravi`, the header's server context line. */
 export const serverLabel = computed(() => {
   if (!client.value) return ""
-  return username.value ? `${client.value.displayHost} · ${username.value}` : client.value.displayHost
+  return username.value
+    ? `${client.value.displayHost} · ${username.value}`
+    : client.value.displayHost
 })
 
 // ── connect ────────────────────────────────────────────────────────────────
@@ -216,9 +221,22 @@ export async function restoreSession(): Promise<boolean> {
 function connectStream(): void {
   const active = client.value
   if (!active) return
+  let opened = false
   unsubscribe = active.subscribe({
     onOpen: () => {
+      const reconnected = opened
+      opened = true
       streamConnected.value = true
+      if (reconnected) {
+        const event: ServerEvent = { type: "stream.reconnected", data: {} }
+        for (const listener of listeners) {
+          try {
+            listener(event)
+          } catch {
+            // One screen's handler throwing must not stop the others.
+          }
+        }
+      }
     },
     onEvent: (event) => {
       for (const listener of listeners) {
@@ -315,7 +333,10 @@ function persistSession(credentials: ServerCredentials): void {
     // switching back to this server mid-session does not re-prompt. It never
     // reaches localStorage and dies with the tab.
     if (credentials.useBasicAuth && credentials.password) {
-      sessionStorage.setItem(`${SESSION_KEY}:password:${credentials.url.trim()}`, credentials.password)
+      sessionStorage.setItem(
+        `${SESSION_KEY}:password:${credentials.url.trim()}`,
+        credentials.password,
+      )
     }
   } catch {
     /* see above */
@@ -337,7 +358,11 @@ function resetSteps(): void {
   steps.splice(0, steps.length, ...freshSteps())
 }
 
-function setStep(id: HandshakeStepId, state: HandshakeStep["state"], detail: string | null = null): void {
+function setStep(
+  id: HandshakeStepId,
+  state: HandshakeStep["state"],
+  detail: string | null = null,
+): void {
   const step = steps.find((item) => item.id === id)
   if (!step) return
   step.state = state

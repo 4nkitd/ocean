@@ -85,7 +85,8 @@ const output = computed<string | null>(() => {
   const raw = state.output
   if (typeof raw === "string" && raw.trim()) return raw
   const metadata = state.metadata as Record<string, unknown> | undefined
-  if (metadata && typeof metadata.output === "string" && metadata.output.trim()) return metadata.output
+  if (metadata && typeof metadata.output === "string" && metadata.output.trim())
+    return metadata.output
   return null
 })
 
@@ -97,50 +98,60 @@ function activate(): void {
 </script>
 
 <template>
-  <component
-    :is="openable ? 'button' : 'div'"
-    class="tool"
-    :class="{ 'tool--openable': openable, 'tool--error': !!errorMessage }"
-    :type="openable ? 'button' : undefined"
-    @click="openable && activate()"
-  >
-    <TypeBadge v-if="filePath" :filename="filePath" :size="20" />
-    <span v-else class="tool__badge" aria-hidden="true">{{ toolName.slice(0, 2).toUpperCase() }}</span>
+  <div class="tool" :class="{ 'tool--openable': openable, 'tool--error': !!errorMessage }">
+    <component
+      :is="openable ? 'button' : 'div'"
+      class="tool__main"
+      :type="openable ? 'button' : undefined"
+      @click="openable && activate()"
+    >
+      <TypeBadge v-if="filePath" :filename="filePath" :size="20" />
+      <span v-else class="tool__badge" aria-hidden="true">{{
+        toolName.slice(0, 2).toUpperCase()
+      }}</span>
 
-    <span class="tool__body">
-      <span class="tool__title">{{ title }}</span>
-      <span v-if="errorMessage" class="tool__error">{{ errorMessage }}</span>
-      <span v-else class="tool__detail">{{ detail }}</span>
-    </span>
+      <span class="tool__body">
+        <span class="tool__title">{{ title }}</span>
+        <span v-if="errorMessage" class="tool__error">{{ errorMessage }}</span>
+        <span v-else class="tool__detail">{{ detail }}</span>
+      </span>
 
-    <AppIcon
-      v-if="status === 'running' || status === 'pending'"
-      name="spinner"
-      :size="15"
-      class="tool__spin"
-    />
-    <AppIcon v-else-if="openable" name="chevron-right" :size="15" class="tool__chevron" />
+      <AppIcon
+        v-if="status === 'running' || status === 'pending'"
+        name="spinner"
+        :size="15"
+        class="tool__spin"
+      />
+      <AppIcon v-else-if="openable" name="chevron-right" :size="15" class="tool__chevron" />
+    </component>
 
     <details v-if="output" class="tool__output">
       <summary class="tool__output-head">output</summary>
       <pre class="tool__output-body">{{ output }}</pre>
     </details>
-  </component>
+  </div>
 </template>
 
 <style scoped>
 .tool {
   width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px var(--space-3);
   border: 2px solid var(--rule);
   text-align: left;
   background: none;
 }
 
-.tool--openable:active {
+.tool__main {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--space-3);
+  color: inherit;
+  text-align: left;
+  background: none;
+}
+
+.tool--openable:active .tool__main {
   background: var(--surface-raised);
 }
 

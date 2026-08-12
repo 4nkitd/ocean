@@ -5,6 +5,7 @@ import type {
   FileContent,
   FileNode,
   FileStatus,
+  GitCommit,
   FsEntry,
   MessageWithParts,
   ModelInfo,
@@ -73,7 +74,8 @@ export class OpenCodeClient {
   private url(path: string, query?: Record<string, string | number | boolean | undefined>): string {
     const url = new URL(this.baseUrl + path)
     for (const [key, value] of Object.entries(query ?? {})) {
-      if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value))
+      if (value !== undefined && value !== null && value !== "")
+        url.searchParams.set(key, String(value))
     }
     return url.toString()
   }
@@ -90,7 +92,14 @@ export class OpenCodeClient {
       optional?: boolean
     } = {},
   ): Promise<T> {
-    const { method = "GET", query, body, signal, timeoutMs = DEFAULT_TIMEOUT_MS, optional = false } = options
+    const {
+      method = "GET",
+      query,
+      body,
+      signal,
+      timeoutMs = DEFAULT_TIMEOUT_MS,
+      optional = false,
+    } = options
     const url = this.url(path, query)
 
     // Compose the caller's signal with our own timeout so either can cancel.
@@ -103,7 +112,9 @@ export class OpenCodeClient {
     try {
       response = await fetch(url, {
         method,
-        headers: this.headers(body !== undefined ? { "Content-Type": "application/json" } : undefined),
+        headers: this.headers(
+          body !== undefined ? { "Content-Type": "application/json" } : undefined,
+        ),
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: composed,
         mode: "cors",
@@ -114,7 +125,8 @@ export class OpenCodeClient {
       // firing means "cancelled", ours means "timed out", and neither is a
       // server error the user should see as one.
       if (signal?.aborted) throw new ApiError("aborted", "Request cancelled", null, url)
-      if (timeoutController.signal.aborted) throw new ApiError("timeout", "Request timed out", null, url)
+      if (timeoutController.signal.aborted)
+        throw new ApiError("timeout", "Request timed out", null, url)
       throw new ApiError(
         "network",
         cause instanceof Error ? cause.message : "Network request failed",
@@ -155,7 +167,12 @@ export class OpenCodeClient {
     const contentType = response.headers.get("content-type") ?? ""
     if (contentType.includes("text/html")) {
       if (optional) return null as T
-      throw new ApiError("notfound", `No API at ${path} — the server answered with its web UI`, 404, url)
+      throw new ApiError(
+        "notfound",
+        `No API at ${path} — the server answered with its web UI`,
+        404,
+        url,
+      )
     }
 
     const text = await response.text()
@@ -256,6 +273,21 @@ export class OpenCodeClient {
     return this.request<VcsInfo>("/vcs", { query: { directory }, signal, optional: true })
   }
 
+  async getVcsCommits(directory: string, limit = 20, signal?: AbortSignal): Promise<GitCommit[]> {
+    const result = await this.requestFirst<
+      GitCommit[] | { data?: GitCommit[]; commits?: GitCommit[] }
+    >("vcs-log", ["/vcs/log", "/vcs/commits", "/vcs/history"], {
+      query: { directory, limit },
+      signal,
+    })
+    const commits = Array.isArray(result) ? result : (result?.data ?? result?.commits ?? [])
+    return commits.slice(0, limit).map((commit) => ({
+      ...commit,
+      shortHash: commit.shortHash || commit.hash.slice(0, 7),
+      refs: commit.refs ?? [],
+    }))
+  }
+
   /**
    * Working-tree changes from the first-class VCS endpoint. Modern builds
    * answer this; older ones return `/file/status`-shaped data instead.
@@ -270,7 +302,11 @@ export class OpenCodeClient {
   }
 
   /** Per-file patches from the VCS API. `mode` is `"git"` (worktree) or `"branch"`. */
-  async getVcsDiff(directory: string, mode: "git" | "branch" = "git", signal?: AbortSignal): Promise<VcsDiffFile[]> {
+  async getVcsDiff(
+    directory: string,
+    mode: "git" | "branch" = "git",
+    signal?: AbortSignal,
+  ): Promise<VcsDiffFile[]> {
     const result = await this.request<VcsDiffFile[]>("/vcs/diff", {
       query: { directory, mode },
       signal,
@@ -320,13 +356,34 @@ export class OpenCodeClient {
   }
 
   /** One session, including the agent and model it currently runs under. */
-  async getSession(sessionId: string, directory?: string, signal?: AbortSignal): Promise<Session | null> {
+  async getSession(
+    sessionId: string,
+    directory?: string,
+    signal?: AbortSignal,
+  ): Promise<Session | null> {
     const result = await this.request<Session>(`/session/${encodeURIComponent(sessionId)}`, {
       query: { directory },
       signal,
       optional: true,
     })
     return result ?? null
+  }
+
+  async getSessionStatuses(
+    directory?: string,
+    signal?: AbortSignal,
+  ): Promise<Record<string, { type?: string }> | null> {
+    try {
+      const result = await this.requestFirst<Record<string, { type?: string }>>(
+        "session-status",
+        ["/session/status", "/api/session/status"],
+        { query: { directory }, signal },
+      )
+      return result ?? {}
+    } catch (error) {
+      if (error instanceof ApiError && error.kind === "notfound") return null
+      throw error
+    }
   }
 
   async createSession(directory?: string, title?: string, signal?: AbortSignal): Promise<Session> {
@@ -346,19 +403,21 @@ export class OpenCodeClient {
     })
   }
 
-  async listMessages(sessionId: string, directory?: string, signal?: AbortSignal): Promise<MessageWithParts[]> {
-    const result = await this.request<MessageWithParts[]>(
-      `/session/${encodeURIComponent(sessionId)}/message`,
+  async listMessages(
+    sessionId: string,
+    directory?: string,
+    signal?: AbortSignal,
+  ): Promise<MessageWithParts[]> {
+    const encoded = encodeURIComponent(sessionId)
+    const result = await this.requestFirst<MessageWithParts[]>(
+      "session-messages",
+      [`/session/${encoded}/message`, `/api/session/${encoded}/message`],
       { query: { directory }, signal },
     )
     return result ?? []
   }
 
-  /**
-   * Send a prompt. The response body is the completed assistant message, but
-   * the UI does not wait for it — parts arrive over the event stream as they
-   * are produced, and this promise resolving is what ends the "sending" state.
-   */
+  /** Send a prompt admission request; assistant output arrives on the SSE stream. */
   async sendPrompt(
     sessionId: string,
     text: string,
@@ -370,32 +429,50 @@ export class OpenCodeClient {
       agent?: string
       signal?: AbortSignal
     } = {},
-  ): Promise<MessageWithParts> {
+  ): Promise<MessageWithParts | null> {
     const model =
       options.providerID && options.modelID
         ? { providerID: options.providerID, modelID: options.modelID }
         : undefined
-    return this.request<MessageWithParts>(`/session/${encodeURIComponent(sessionId)}/message`, {
-      method: "POST",
-      query: { directory: options.directory },
-      body: {
-        parts: [{ type: "text", text }],
-        ...(model ? { model } : {}),
-        ...(options.variant ? { variant: options.variant } : {}),
-        ...(options.agent ? { agent: options.agent } : {}),
+    const encoded = encodeURIComponent(sessionId)
+    return this.requestFirst<MessageWithParts | null>(
+      "session-prompt",
+      [
+        `/session/${encoded}/prompt_async`,
+        `/session/${encoded}/message`,
+        `/api/session/${encoded}/prompt`,
+      ],
+      {
+        method: "POST",
+        query: { directory: options.directory },
+        body: {
+          parts: [{ type: "text", text }],
+          ...(model
+            ? {
+                model: {
+                  ...model,
+                  ...(options.variant ? { variant: options.variant } : {}),
+                },
+              }
+            : {}),
+          ...(options.agent ? { agent: options.agent } : {}),
+        },
+        signal: options.signal,
+        timeoutMs: 10 * 60_000,
       },
-      signal: options.signal,
-      // A model turn can run for minutes; the stream carries progress meanwhile.
-      timeoutMs: 10 * 60_000,
-    })
+    )
   }
 
   async abortSession(sessionId: string, directory?: string): Promise<void> {
-    await this.request<void>(`/session/${encodeURIComponent(sessionId)}/abort`, {
-      method: "POST",
-      query: { directory },
-      optional: true,
-    })
+    const encoded = encodeURIComponent(sessionId)
+    await this.requestFirst<void>(
+      "session-abort",
+      [`/session/${encoded}/abort`, `/api/session/${encoded}/interrupt`],
+      {
+        method: "POST",
+        query: { directory },
+      },
+    )
   }
 
   // ── files ───────────────────────────────────────────────────────────────
@@ -494,9 +571,14 @@ export class OpenCodeClient {
       signal,
       optional: true,
     })
-    if (Array.isArray(modern?.data)) return modern.data.map(toAgent).filter((agent): agent is AgentInfo => !!agent)
+    if (Array.isArray(modern?.data))
+      return modern.data.map(toAgent).filter((agent): agent is AgentInfo => !!agent)
 
-    const legacy = await this.request<unknown[]>("/agent", { query: { directory }, signal, optional: true })
+    const legacy = await this.request<unknown[]>("/agent", {
+      query: { directory },
+      signal,
+      optional: true,
+    })
     return (legacy ?? []).map(toAgent).filter((agent): agent is AgentInfo => !!agent)
   }
 
@@ -509,14 +591,20 @@ export class OpenCodeClient {
     })
     const candidates = Array.isArray(modern?.data)
       ? modern.data
-      : ((await this.request<ModelInfo[]>("/model", { query: { directory }, signal, optional: true })) ?? [])
+      : ((await this.request<ModelInfo[]>("/model", {
+          query: { directory },
+          signal,
+          optional: true,
+        })) ?? [])
     return candidates
       .filter((model) => model.enabled !== false && model.status !== "deprecated")
       .map((model) => ({
         ...model,
         name: model.name ?? model.id,
         variants: Array.isArray(model.variants)
-          ? model.variants.map((variant) => (typeof variant === "string" ? variant : String(variant)))
+          ? model.variants.map((variant) =>
+              typeof variant === "string" ? variant : String(variant),
+            )
           : [],
       }))
   }
@@ -565,35 +653,54 @@ export class OpenCodeClient {
     const controller = new AbortController()
     let closed = false
     let retryDelay = 1_000
+    let streamPath: string | null = null
 
     const run = async () => {
       while (!closed) {
         try {
-          const response = await fetch(this.url("/event", { directory }), {
-            headers: this.headers({ Accept: "text/event-stream" }),
-            signal: controller.signal,
-            mode: "cors",
-            credentials: "omit",
-          })
-          if (!response.ok || !response.body) {
-            throw new ApiError(
-              response.status === 401 || response.status === 403 ? "auth" : "network",
-              `Event stream failed (${response.status})`,
-              response.status,
-            )
+          const candidates = streamPath ? [streamPath] : ["/global/event", "/event", "/api/event"]
+          let response: Response | null = null
+          for (const path of candidates) {
+            const candidate = await fetch(this.url(path, { directory }), {
+              headers: this.headers({ Accept: "text/event-stream" }),
+              signal: controller.signal,
+              mode: "cors",
+              credentials: "omit",
+            })
+            const contentType = candidate.headers.get("content-type") ?? ""
+            if (candidate.status === 401 || candidate.status === 403) {
+              throw new ApiError(
+                "auth",
+                `Event stream failed (${candidate.status})`,
+                candidate.status,
+              )
+            }
+            if (candidate.ok && candidate.body && contentType.includes("text/event-stream")) {
+              response = candidate
+              streamPath = path
+              break
+            }
           }
+          if (!response)
+            throw new ApiError("network", "No compatible event stream endpoint responded")
 
           handlers.onOpen?.()
           retryDelay = 1_000 // a successful open resets the backoff
 
-          const reader = response.body.getReader()
+          const body = response.body
+          if (!body) throw new ApiError("network", "Event stream has no response body")
+          const reader = body.getReader()
           const decoder = new TextDecoder()
           let buffer = ""
 
           while (!closed) {
             const { done, value } = await reader.read()
-            if (done) break
+            if (done) {
+              if (!closed) handlers.onError?.(new ApiError("network", "Event stream closed"))
+              break
+            }
             buffer += decoder.decode(value, { stream: true })
+            buffer = buffer.replace(/\r\n?/g, "\n")
 
             // SSE frames are separated by a blank line.
             let boundary = buffer.indexOf("\n\n")
@@ -607,7 +714,8 @@ export class OpenCodeClient {
                 .join("\n")
               if (payload) {
                 try {
-                  handlers.onEvent(JSON.parse(payload) as ServerEvent)
+                  const event = normaliseServerEvent(JSON.parse(payload) as unknown)
+                  if (event) handlers.onEvent(event)
                 } catch {
                   // A malformed frame is not worth tearing the stream down for.
                 }
@@ -622,7 +730,8 @@ export class OpenCodeClient {
 
         if (closed) return
         // Reconnect with backoff — a phone changing networks is routine.
-        await sleep(retryDelay)
+        const shouldRetry = await sleep(retryDelay, controller.signal)
+        if (!shouldRetry) return
         retryDelay = Math.min(retryDelay * 2, 15_000)
       }
     }
@@ -686,7 +795,11 @@ async function errorBody(response: Response): Promise<string> {
     const text = await response.text()
     if (!text) return response.statusText || `HTTP ${response.status}`
     try {
-      const parsed = JSON.parse(text) as { message?: string; error?: string; data?: { message?: string } }
+      const parsed = JSON.parse(text) as {
+        message?: string
+        error?: string
+        data?: { message?: string }
+      }
       return parsed.data?.message ?? parsed.message ?? parsed.error ?? text.slice(0, 300)
     } catch {
       return text.slice(0, 300)
@@ -711,15 +824,66 @@ function anySignal(signals: AbortSignal[]): AbortSignal {
   return controller.signal
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function sleep(ms: number, signal?: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(false)
+      return
+    }
+
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve(true)
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      resolve(false)
+    }
+    signal?.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+function normaliseServerEvent(value: unknown): ServerEvent | null {
+  const root = record(value)
+  if (!root) return null
+  const payload = record(root.payload)
+  const source = payload?.type ? payload : root
+  const type = typeof source.type === "string" ? source.type : null
+  if (!type) return null
+
+  const rootData = record(root.data) ?? record(root.properties)
+  const sourceData = record(source.data) ?? record(source.properties)
+  const data = { ...(rootData ?? {}), ...(sourceData ?? {}) }
+  const sessionID =
+    stringValue(source.sessionID) ??
+    stringValue(root.sessionID) ??
+    stringValue(data.sessionID) ??
+    undefined
+  if (sessionID && !data.sessionID) data.sessionID = sessionID
+
+  return {
+    type,
+    id: stringValue(root.id) ?? undefined,
+    directory: stringValue(root.directory) ?? stringValue(source.directory) ?? undefined,
+    sessionID,
+    data,
+  }
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null
 }
 
 /** Normalise either agent envelope (array items or `{id}`) into `AgentInfo`. */
 function toAgent(value: unknown): AgentInfo | null {
   if (!value || typeof value !== "object") return null
   const entry = value as Record<string, unknown>
-  const id = typeof entry.id === "string" ? entry.id : typeof entry.name === "string" ? entry.name : null
+  const id =
+    typeof entry.id === "string" ? entry.id : typeof entry.name === "string" ? entry.name : null
   if (!id) return null
   return {
     id,

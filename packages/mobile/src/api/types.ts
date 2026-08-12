@@ -69,7 +69,13 @@ export interface Session {
   /** The agent this session runs under, on builds that report it. */
   agent?: string
   /** The model this session runs under, on builds that report it. */
-  model?: { id?: string; modelID?: string; providerID?: string; provider?: string; variant?: string }
+  model?: {
+    id?: string
+    modelID?: string
+    providerID?: string
+    provider?: string
+    variant?: string
+  }
   /** Present while the assistant is producing a turn. */
   revert?: unknown
 }
@@ -116,7 +122,12 @@ export type ToolState =
       metadata?: Record<string, unknown>
       time?: { start: number; end: number }
     }
-  | { status: "error"; error: string; input?: Record<string, unknown>; time?: { start: number; end: number } }
+  | {
+      status: "error"
+      error: string
+      input?: Record<string, unknown>
+      time?: { start: number; end: number }
+    }
 
 export interface Part {
   id: string
@@ -268,6 +279,9 @@ export interface VcsPushResult {
 /** `GET /event` — the server's SSE stream. */
 export interface ServerEvent {
   type: string
+  id?: string
+  directory?: string
+  sessionID?: string
   /**
    * The event payload. Modern builds deliver it under `data` (with `sessionID`
    * at the top level); older builds used `properties`. Consumers read both.

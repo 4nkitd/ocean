@@ -149,7 +149,9 @@ const assistantError = computed(() => {
 })
 
 /** An assistant turn that has been created but has produced nothing yet. */
-const awaitingOutput = computed(() => !isUser.value && items.value.length === 0 && !assistantError.value)
+const awaitingOutput = computed(
+  () => !isUser.value && turnActive.value && items.value.length === 0 && !assistantError.value,
+)
 </script>
 
 <template>
@@ -175,7 +177,10 @@ const awaitingOutput = computed(() => !isUser.value && items.value.length === 0 
       <template v-for="item in items" :key="item.key">
         <div v-if="item.kind === 'prose'" class="prose">
           <template v-for="(block, index) in item.blocks" :key="index">
-            <pre v-if="block.kind === 'code'" class="prose__code"><code>{{ block.text }}</code></pre>
+            <pre
+              v-if="block.kind === 'code'"
+              class="prose__code"
+            ><code>{{ block.text }}</code></pre>
             <p v-else class="prose__para">
               <template v-for="(span, spanIndex) in block.spans" :key="spanIndex">
                 <code v-if="span.kind === 'code'" class="prose__inline">{{ span.text }}</code>
@@ -211,7 +216,7 @@ const awaitingOutput = computed(() => !isUser.value && items.value.length === 0 
       </template>
 
       <p v-if="assistantError" class="turn__failure">{{ assistantError }}</p>
-      <p v-else-if="awaitingOutput" class="turn__waiting">…</p>
+      <p v-else-if="awaitingOutput" class="turn__waiting">Thinking…</p>
     </template>
   </article>
 </template>
@@ -323,6 +328,16 @@ const awaitingOutput = computed(() => !isUser.value && items.value.length === 0 
   font-family: var(--font-mono);
   font-size: 14px;
   color: var(--text-dim);
+}
+
+@media (min-width: 760px) {
+  .turn {
+    max-width: 780px;
+  }
+
+  .turn--user {
+    align-self: flex-end;
+  }
 }
 
 .reasoning {

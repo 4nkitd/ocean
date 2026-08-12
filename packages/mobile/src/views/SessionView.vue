@@ -15,7 +15,7 @@ import { toUserMessage } from "@/api/errors"
 import type { ModelRef } from "@/api/types"
 import { compactNumber } from "@/lib/format"
 import { decodePathParam, encodePathParam } from "@/router"
-import { isDirectoryGitRepo, requireClient } from "@/stores/connection"
+import { connection, isDirectoryGitRepo, requireClient } from "@/stores/connection"
 import { useSession } from "@/stores/session"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
@@ -27,12 +27,31 @@ import PromptComposer from "@/components/chat/PromptComposer.vue"
 const route = useRoute()
 const router = useRouter()
 
-const directory = computed(() => decodePathParam(route.params.directory as string | string[] | undefined))
-const sessionId = computed(() => decodePathParam(route.params.sessionId as string | string[] | undefined))
+const directory = computed(() =>
+  decodePathParam(route.params.directory as string | string[] | undefined),
+)
+const sessionId = computed(() =>
+  decodePathParam(route.params.sessionId as string | string[] | undefined),
+)
 const projectPath = computed(() => `/p/${encodePathParam(directory.value)}`)
+const streamConnected = connection.streamConnected
 
-const { messages, loading, error, sending, isStreaming, send, retry, abort, reload, agent, model, setAgent, setModel } =
-  useSession(sessionId, directory)
+const {
+  messages,
+  loading,
+  error,
+  sending,
+  isStreaming,
+  title,
+  send,
+  retry,
+  abort,
+  reload,
+  agent,
+  model,
+  setAgent,
+  setModel,
+} = useSession(sessionId, directory)
 
 // ── agent / model selector ─────────────────────────────────────────────────
 
@@ -103,7 +122,11 @@ async function startNewSession(): Promise<void> {
   creating.value = true
   createError.value = null
   try {
-    const session = await requireClient().createSession(directory.value, undefined, createController.signal)
+    const session = await requireClient().createSession(
+      directory.value,
+      undefined,
+      createController.signal,
+    )
     await router.push(`${projectPath.value}/session/${encodeURIComponent(session.id)}`)
   } catch (cause) {
     createError.value = toUserMessage(cause)
@@ -203,8 +226,9 @@ watch(
       </button>
 
       <div class="head__text">
-        <h1 class="head__title">Session</h1>
+        <h1 class="head__title">{{ title || "Session" }}</h1>
         <p class="head__sub">{{ subtitle }}</p>
+        <p v-if="!streamConnected" class="head__stream" role="status">event stream reconnecting…</p>
       </div>
 
       <div class="head__actions">
@@ -233,7 +257,11 @@ watch(
           :disabled="creating"
           @click="startNewSession"
         >
-          <AppIcon :name="creating ? 'spinner' : 'plus'" :size="18" :class="{ 'head__spin': creating }" />
+          <AppIcon
+            :name="creating ? 'spinner' : 'plus'"
+            :size="18"
+            :class="{ head__spin: creating }"
+          />
         </button>
       </div>
     </header>
@@ -242,6 +270,10 @@ watch(
 
     <div class="body">
       <div ref="scroller" class="transcript scroll-y" @scroll.passive="onScroll">
+        <div v-if="loading && messages.length" class="transcript__sync" role="status">
+          <AppIcon name="spinner" :size="14" class="transcript__sync-spin" />
+          <span>Syncing conversation…</span>
+        </div>
         <StateBlock
           v-if="loading && messages.length === 0"
           variant="loading"
@@ -260,7 +292,7 @@ watch(
           variant="empty"
           message="No messages yet — ask something about this repo"
         />
-        <div v-else class="turns" aria-live="polite" :aria-busy="isStreaming">
+        <div v-else class="turns" aria-live="polite" :aria-busy="loading || isStreaming">
           <MessageBubble
             v-for="message in messages"
             :key="message.info.id"
@@ -291,7 +323,7 @@ watch(
     <PromptComposer
       :sending="sending"
       :streaming="isStreaming"
-      :disabled="!!error"
+      :disabled="loading || !!error || isStreaming"
       @send="onSend"
       @abort="abort"
     />
@@ -358,6 +390,13 @@ watch(
   white-space: nowrap;
 }
 
+.head__stream {
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
 .head__actions {
   flex: none;
   display: flex;
@@ -416,6 +455,20 @@ watch(
   flex-direction: column;
   gap: 18px;
   padding: var(--space-4) var(--space-5);
+}
+
+.transcript__sync {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px var(--space-5);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.transcript__sync-spin {
+  animation: spin 0.9s linear infinite;
 }
 
 .jump {
@@ -478,6 +531,40 @@ watch(
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (min-width: 760px) {
+  .head {
+    padding: calc(var(--safe-top) + 20px) 28px 16px;
+  }
+
+  .head__title {
+    font-size: 24px;
+  }
+
+  .head__error {
+    padding-left: 28px;
+    padding-right: 28px;
+  }
+
+  .turns {
+    max-width: 840px;
+    margin: 0 auto;
+    padding: 32px 28px 48px;
+    gap: 24px;
+  }
+
+  .transcript__sync {
+    max-width: 840px;
+    margin: 0 auto;
+    padding-left: 28px;
+    padding-right: 28px;
+  }
+
+  .selector {
+    padding-left: max(20px, calc((100% - 840px) / 2));
+    padding-right: max(20px, calc((100% - 840px) / 2));
   }
 }
 </style>

@@ -1,17 +1,9 @@
 <script setup lang="ts">
-/**
- * Git status.
- *
- * Everything here comes from the server's VCS endpoints: the branch block
- * from `/vcs`, the change list from `/vcs/status`, and commit and push from
- * their named endpoints. The server's API draws the boundary — there is no
- * staging or history endpoint, so the screen stops where the API stops,
- * exactly like the server's own UI.
- */
 import { computed, onMounted, ref } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import type { FileStatus } from "@/api/types"
 import CommitComposer from "@/components/git/CommitComposer.vue"
+import GitCommitRow from "@/components/git/GitCommitRow.vue"
 import GitFileRow from "@/components/git/GitFileRow.vue"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
@@ -55,8 +47,13 @@ const tabs = computed<NavTab[]>(() => [
 
 // Refs, not values — the template unwraps them and the store keeps writing to them.
 const { status, statusLoading, statusError, refreshStatus } = git
+const { commits, commitsLoading, commitsError, refreshCommits } = git
 
 const hasChanges = computed(() => (status.value?.files.length ?? 0) > 0)
+const changeCount = computed(() => status.value?.files.length ?? 0)
+
+type GitViewMode = "changes" | "commits"
+const viewMode = ref<GitViewMode>("changes")
 
 /** Branch, upstream and ahead/behind all come from `/vcs`; hide them together. */
 const showBranchBlock = computed(() => Boolean(status.value?.branch))
@@ -109,6 +106,11 @@ function dismissFeedback() {
   pushError.value = null
 }
 
+function selectView(mode: GitViewMode) {
+  viewMode.value = mode
+  if (mode === "commits") void refreshCommits()
+}
+
 // ── navigation ────────────────────────────────────────────────────────────
 
 function open(file: FileStatus) {
@@ -121,7 +123,8 @@ function open(file: FileStatus) {
 }
 
 onMounted(() => {
-  if (isRepo.value) void refreshStatus()
+  if (!isRepo.value) return
+  void refreshStatus()
 })
 </script>
 
@@ -152,6 +155,29 @@ onMounted(() => {
       </div>
     </header>
 
+    <nav v-if="isRepo" class="view-switch" aria-label="Git views">
+      <button
+        type="button"
+        class="view-switch__button"
+        :class="{ 'view-switch__button--active': viewMode === 'changes' }"
+        :aria-pressed="viewMode === 'changes'"
+        @click="selectView('changes')"
+      >
+        <span>Changes</span>
+        <span v-if="status" class="view-switch__count">{{ changeCount }}</span>
+      </button>
+      <button
+        type="button"
+        class="view-switch__button"
+        :class="{ 'view-switch__button--active': viewMode === 'commits' }"
+        :aria-pressed="viewMode === 'commits'"
+        @click="selectView('commits')"
+      >
+        <AppIcon name="history" :size="14" />
+        <span>Commits</span>
+      </button>
+    </nav>
+
     <div class="scroll-y body">
       <div v-if="!isRepo" class="notice">
         <div class="label notice__label">Git unavailable</div>
@@ -162,7 +188,7 @@ onMounted(() => {
         <p class="notice__hint">Run git init on the server</p>
       </div>
 
-      <template v-else>
+      <template v-else-if="viewMode === 'changes'">
         <StateBlock
           v-if="statusLoading && !status"
           variant="loading"
@@ -199,10 +225,57 @@ onMounted(() => {
           </section>
         </template>
       </template>
+
+      <template v-else>
+        <section class="history" aria-labelledby="history-heading">
+          <div class="section__head">
+            <span id="history-heading" class="label">
+              Recent commits<span v-if="commits.length"> · {{ commits.length }}</span>
+            </span>
+            <button
+              type="button"
+              class="history__refresh"
+              aria-label="Refresh recent commits"
+              :disabled="commitsLoading"
+              @click="refreshCommits()"
+            >
+              <AppIcon name="refresh" :size="15" :class="{ history__spin: commitsLoading }" />
+            </button>
+          </div>
+
+          <StateBlock
+            v-if="commitsLoading && !commits.length"
+            variant="loading"
+            label="Commit history"
+            message="Reading recent commits."
+          />
+          <StateBlock
+            v-else-if="commitsError && !commits.length"
+            variant="error"
+            label="History unavailable"
+            :message="commitsError"
+            @retry="refreshCommits()"
+          />
+          <StateBlock
+            v-else-if="!commits.length"
+            variant="empty"
+            label="No commits yet"
+            message="This repository does not have any commits to show."
+          />
+          <template v-else>
+            <div v-if="commitsError" class="history__stale" role="status">
+              <span>{{ commitsError }}</span>
+              <button type="button" @click="refreshCommits()">Retry</button>
+            </div>
+            <GitCommitRow v-for="commit in commits" :key="commit.hash" :commit="commit" />
+          </template>
+        </section>
+      </template>
     </div>
 
     <CommitComposer
-      v-if="isRepo"
+      v-if="isRepo && viewMode === 'changes'"
+      :change-count="changeCount"
       :blocked-reason="commitBlockedReason"
       :writable="!commitBlockedReason"
       :pending="commitPending"
@@ -232,7 +305,6 @@ onMounted(() => {
 .head {
   flex: none;
   padding: calc(var(--safe-top) + var(--space-5)) var(--space-5) 14px;
-  border-bottom: 2px solid var(--rule);
 }
 
 .head__row {
@@ -287,6 +359,42 @@ onMounted(() => {
   white-space: nowrap;
 }
 
+.view-switch {
+  flex: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 0 var(--space-5);
+  border-bottom: 2px solid var(--rule);
+}
+
+.view-switch__button {
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.view-switch__button--active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.view-switch__button:active {
+  background: var(--surface-raised);
+}
+
+.view-switch__count {
+  color: var(--text-muted);
+}
+
 .body {
   flex: 1;
   min-height: 0;
@@ -300,6 +408,47 @@ onMounted(() => {
   padding: var(--space-3) var(--space-5);
   background: var(--surface-raised);
   border-bottom: 1px solid var(--rule);
+}
+
+.history__refresh {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.history__refresh:active:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+
+.history__refresh:disabled {
+  opacity: 0.5;
+}
+
+.history__spin {
+  animation: spin 0.9s linear infinite;
+}
+
+.history__stale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 10px var(--space-5);
+  border-bottom: 1px solid var(--rule);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.history__stale button {
+  flex: none;
+  min-height: 32px;
+  color: var(--accent-400);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 
 .notice {
