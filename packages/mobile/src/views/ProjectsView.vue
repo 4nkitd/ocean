@@ -19,7 +19,7 @@ import { useProjects } from "@/stores/projects"
 
 const router = useRouter()
 const { serverLabel, workingDirectory } = connection
-const { loading, error, projects, refresh, move } = useProjects()
+const { loading, error, projects, refresh, move, toggleFavourite } = useProjects()
 
 const reordering = ref(false)
 const adding = ref(false)
@@ -116,18 +116,31 @@ function chooseDirectory(path: string) {
         </button>
       </div>
 
-      <div v-if="showFilter" class="filter">
-        <AppIcon name="search" :size="14" class="filter__icon" />
-        <label class="sr-only" for="project-filter">Filter projects</label>
-        <input
-          id="project-filter"
-          v-model="query"
-          class="filter__input"
-          type="search"
-          placeholder="Filter projects"
-          spellcheck="false"
-          autocapitalize="off"
-        />
+      <div class="tools">
+        <div v-if="showFilter" class="filter">
+          <AppIcon name="search" :size="14" class="filter__icon" />
+          <label class="sr-only" for="project-filter">Filter projects</label>
+          <input
+            id="project-filter"
+            v-model="query"
+            class="filter__input"
+            type="search"
+            placeholder="Filter projects"
+            spellcheck="false"
+            autocapitalize="off"
+          />
+        </div>
+
+        <button
+          type="button"
+          class="tools__add"
+          aria-haspopup="dialog"
+          :aria-expanded="adding"
+          @click="adding = true"
+        >
+          <AppIcon name="plus" :size="15" />
+          <span>Add project</span>
+        </button>
       </div>
     </header>
 
@@ -172,20 +185,9 @@ function chooseDirectory(path: string) {
           :can-move-down="index < visibleProjects.length - 1"
           @select="open(project.worktree)"
           @move="move(project.id, $event)"
+          @favourite="toggleFavourite(project.id)"
         />
       </ul>
-
-      <button
-        v-if="!loading"
-        type="button"
-        class="add"
-        aria-haspopup="dialog"
-        :aria-expanded="adding"
-        @click="adding = true"
-      >
-        <span class="add__tile" aria-hidden="true"><AppIcon name="plus" :size="18" /></span>
-        <span class="add__label">Add a project directory</span>
-      </button>
     </div>
 
     <BottomNav :tabs="tabs" active="projects" />
@@ -271,11 +273,41 @@ function chooseDirectory(path: string) {
   color: var(--text-muted);
 }
 
+.tools {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.tools__add {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 2px solid var(--rule);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.tools__add:hover {
+  border-color: var(--accent);
+}
+
+.tools__add:active {
+  background: var(--surface-raised);
+}
+
 .filter {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-top: var(--space-4);
   padding: 0 var(--space-3);
   border: 2px solid var(--rule);
   background: var(--surface-raised);
@@ -332,64 +364,22 @@ function chooseDirectory(path: string) {
   padding: 0;
 }
 
-.add {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--rule-hair);
-  color: var(--text-muted);
-  text-align: left;
-}
-
-.add:active {
-  background: var(--surface-raised);
-}
-
-.add__tile {
-  width: 44px;
-  height: 44px;
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid var(--rule);
-}
-
-.add__label {
-  font-size: 14px;
-}
-
-/* Desktop: the column becomes a card grid, and the add tile joins it as the
-   last cell rather than trailing the list as a full-width row. */
+/* Desktop: the column becomes a card grid using the full width. */
 @media (min-width: 900px) {
   .screen__head {
     padding-left: 28px;
     padding-right: 28px;
   }
 
-  .filter {
-    max-width: 420px;
+  .tools {
+    max-width: 560px;
   }
 
   .list {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 14px;
-    padding: 22px 28px 0;
-  }
-
-  .add {
-    width: auto;
-    min-height: 92px;
-    margin: 14px 28px 28px;
-    border: 2px dashed var(--rule);
-  }
-
-  .add:hover {
-    border-color: var(--accent);
-    color: var(--text);
+    padding: 22px 28px 28px;
   }
 }
 </style>

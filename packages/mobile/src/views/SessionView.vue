@@ -12,7 +12,8 @@
 import { computed, nextTick, onUnmounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { toUserMessage } from "@/api/errors"
-import type { ModelRef } from "@/api/types"
+import type { GitCommit, ModelRef } from "@/api/types"
+import CommitDetail from "@/components/git/CommitDetail.vue"
 import DesktopSessionSidebar from "@/components/desktop/DesktopSessionSidebar.vue"
 import DesktopFilePreview from "@/components/desktop/DesktopFilePreview.vue"
 import DesktopWorkspacePanel from "@/components/desktop/DesktopWorkspacePanel.vue"
@@ -40,9 +41,17 @@ const sessionId = computed(() =>
 const projectPath = computed(() => `/p/${encodePathParam(directory.value)}`)
 const streamConnected = connection.streamConnected
 
-type DesktopFileTab = { path: string; name: string }
-const desktopTabs = ref<DesktopFileTab[]>([])
+/**
+ * The centre pane's tabs. Chat is always present and is not in this list; a
+ * file and a commit are both openable, so the id carries which kind it is.
+ */
+type DesktopTab = { id: string; kind: "file" | "commit"; name: string; target: string }
+const desktopTabs = ref<DesktopTab[]>([])
 const activeDesktopTab = ref("chat")
+
+const activeTab = computed(
+  () => desktopTabs.value.find((tab) => tab.id === activeDesktopTab.value) ?? null,
+)
 
 const {
   messages,
@@ -203,10 +212,26 @@ function openFile(path: string): void {
 function openDesktopFile(path: string): void {
   const root = directory.value.replace(/\/+$/, "")
   const absolute = path.startsWith("/") ? path : `${root}/${path}`
-  if (!desktopTabs.value.some((tab) => tab.path === absolute)) {
-    desktopTabs.value.push({ path: absolute, name: basename(absolute) })
-  }
-  activeDesktopTab.value = absolute
+  openDesktopTab({
+    id: `file:${absolute}`,
+    kind: "file",
+    name: basename(absolute),
+    target: absolute,
+  })
+}
+
+function openDesktopCommit(commit: GitCommit): void {
+  openDesktopTab({
+    id: `commit:${commit.hash}`,
+    kind: "commit",
+    name: commit.shortHash || commit.hash.slice(0, 7),
+    target: commit.hash,
+  })
+}
+
+function openDesktopTab(tab: DesktopTab): void {
+  if (!desktopTabs.value.some((existing) => existing.id === tab.id)) desktopTabs.value.push(tab)
+  activeDesktopTab.value = tab.id
   sheetOpen.value = false
 }
 
@@ -214,17 +239,17 @@ function isDesktopViewport(): boolean {
   return typeof window !== "undefined" && window.matchMedia("(min-width: 1080px)").matches
 }
 
-function selectDesktopTab(path: string): void {
-  activeDesktopTab.value = path
+function selectDesktopTab(id: string): void {
+  activeDesktopTab.value = id
 }
 
-function closeDesktopFile(path: string): void {
-  const index = desktopTabs.value.findIndex((tab) => tab.path === path)
+function closeDesktopTab(id: string): void {
+  const index = desktopTabs.value.findIndex((tab) => tab.id === id)
   if (index === -1) return
   desktopTabs.value.splice(index, 1)
-  if (activeDesktopTab.value !== path) return
+  if (activeDesktopTab.value !== id) return
   activeDesktopTab.value =
-    desktopTabs.value[index - 1]?.path ?? desktopTabs.value[index]?.path ?? "chat"
+    desktopTabs.value[index - 1]?.id ?? desktopTabs.value[index]?.id ?? "chat"
 }
 
 function openSiblingSession(id: string): void {
@@ -284,6 +309,7 @@ watch(
       :current-session-id="sessionId"
       @select="openSiblingSession"
       @new-session="startNewSession"
+      @projects="router.push('/projects')"
     />
 
     <div class="screen__core">
@@ -347,21 +373,22 @@ watch(
           <AppIcon name="chat" :size="14" />
           <span>Chat</span>
         </button>
-        <div v-for="tab in desktopTabs" :key="tab.path" class="desktop-tab-group">
+        <div v-for="tab in desktopTabs" :key="tab.id" class="desktop-tab-group">
           <button
             type="button"
             class="desktop-tab"
-            :class="{ 'desktop-tab--active': activeDesktopTab === tab.path }"
-            @click="selectDesktopTab(tab.path)"
+            :class="{ 'desktop-tab--active': activeDesktopTab === tab.id }"
+            @click="selectDesktopTab(tab.id)"
           >
-            <TypeBadge :filename="tab.name" :size="16" />
+            <AppIcon v-if="tab.kind === 'commit'" name="git-branch" :size="13" />
+            <TypeBadge v-else :filename="tab.name" :size="16" />
             <span>{{ tab.name }}</span>
           </button>
           <button
             type="button"
             class="desktop-tab__close"
             :aria-label="`Close ${tab.name}`"
-            @click="closeDesktopFile(tab.path)"
+            @click="closeDesktopTab(tab.id)"
           >
             <AppIcon name="close" :size="12" />
           </button>
@@ -369,11 +396,18 @@ watch(
       </nav>
 
       <DesktopFilePreview
-        v-if="activeDesktopTab !== 'chat'"
-        :key="activeDesktopTab"
+        v-if="activeTab?.kind === 'file'"
+        :key="activeTab.id"
         :directory="directory"
-        :path="activeDesktopTab"
-        @close="closeDesktopFile(activeDesktopTab)"
+        :path="activeTab.target"
+        @close="closeDesktopTab(activeTab!.id)"
+      />
+
+      <CommitDetail
+        v-else-if="activeTab?.kind === 'commit'"
+        :key="activeTab.id"
+        :directory="directory"
+        :hash="activeTab.target"
       />
 
       <template v-else>
@@ -457,6 +491,7 @@ watch(
       :is-repo="isRepo"
       @open-file="openWorkspaceFile"
       @open-diff="openWorkspaceDiff"
+      @open-commit="openDesktopCommit"
       @open-git="openWorkspaceGit"
     />
   </div>

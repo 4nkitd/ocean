@@ -52,7 +52,9 @@ function go(tab: NavTab) {
       }"
       :disabled="tab.disabled"
       :aria-current="tab.id === active ? 'page' : undefined"
-      :aria-label="tab.disabled && tab.disabledReason ? `${tab.label} — ${tab.disabledReason}` : tab.label"
+      :aria-label="
+        tab.disabled && tab.disabledReason ? `${tab.label} — ${tab.disabledReason}` : tab.label
+      "
       :title="tab.disabled ? tab.disabledReason : undefined"
       @click="go(tab)"
     >
@@ -77,11 +79,12 @@ function go(tab: NavTab) {
   min-width: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-2);
   /* 26px below the label clears the home indicator on a device that reports no
      inset; with a real safe area the rail's own padding handles it, so the
      fixed part shrinks there. Desktop gets no dead space at all. */
-  padding: 17px 0 26px var(--space-4);
+  padding: 17px var(--space-3) 26px;
   color: var(--text-muted);
   /* Overlap the rail's own border so the active rule replaces it. */
   border-top: 2px solid transparent;

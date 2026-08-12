@@ -5,12 +5,16 @@ import { relativeTime } from "@/lib/format"
 defineProps<{
   commit: GitCommit
 }>()
+
+const emit = defineEmits<{ select: [] }>()
 </script>
 
 <template>
-  <article
+  <button
+    type="button"
     class="row"
     :aria-label="`${commit.subject || 'No commit message'} by ${commit.author || 'unknown author'}`"
+    @click="emit('select')"
   >
     <div class="row__rail" aria-hidden="true">
       <span class="row__dot" />
@@ -26,15 +30,22 @@ defineProps<{
         <span v-for="ref in commit.refs" :key="ref" class="row__ref">{{ ref }}</span>
       </div>
     </div>
-  </article>
+  </button>
 </template>
 
 <style scoped>
 .row {
+  width: 100%;
   display: flex;
   gap: 12px;
   padding: 15px var(--space-5);
   border-bottom: 1px solid var(--rule-hair);
+  text-align: left;
+}
+
+.row:hover,
+.row:active {
+  background: var(--surface-raised);
 }
 
 .row__rail {

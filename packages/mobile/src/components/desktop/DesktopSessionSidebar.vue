@@ -11,7 +11,7 @@ const props = defineProps<{
   currentSessionId: string
 }>()
 
-const emit = defineEmits<{ select: [string]; newSession: [] }>()
+const emit = defineEmits<{ select: [string]; newSession: []; projects: [] }>()
 
 const sessions = ref<Session[]>([])
 const query = ref("")
@@ -104,6 +104,14 @@ onUnmounted(() => {
   <aside class="sessions" aria-label="Sessions">
     <header class="sessions__head">
       <div class="sessions__brand"><span class="sessions__mark" /> <span>opencode</span></div>
+
+      <!-- The way back out of a project. Without it the only route to the
+           project list is the browser's back button. -->
+      <button type="button" class="sessions__up" @click="emit('projects')">
+        <AppIcon name="grid" :size="13" />
+        <span>All projects</span>
+      </button>
+
       <h2 class="sessions__project">{{ basename(directory) }}</h2>
       <p class="sessions__path">{{ displayPath(directory) }}</p>
     </header>
@@ -204,8 +212,22 @@ onUnmounted(() => {
   background: var(--accent);
 }
 
+.sessions__up {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.sessions__up:hover {
+  color: var(--accent-400);
+}
+
 .sessions__project {
-  margin-top: 18px;
+  margin-top: 12px;
   font-size: 17px;
   letter-spacing: -0.01em;
 }

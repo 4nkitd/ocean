@@ -68,6 +68,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "Git", tab: "git", requiresRepo: true },
   },
   {
+    path: "/p/:directory/git/commit/:hash",
+    name: "commit",
+    component: () => import("@/views/CommitView.vue"),
+    meta: { title: "Commit", requiresRepo: true },
+  },
+  {
     path: "/p/:directory/git/diff/:path",
     name: "diff",
     component: () => import("@/views/DiffView.vue"),
@@ -118,7 +124,8 @@ router.beforeEach(async (to) => {
   // is per-directory: the handshake's flag answers for the server's *current*
   // project, which on a multi-project server is not the directory in the URL.
   if (to.meta.requiresRepo) {
-    const directory = typeof to.params.directory === "string" ? decodePathParam(to.params.directory) : ""
+    const directory =
+      typeof to.params.directory === "string" ? decodePathParam(to.params.directory) : ""
     const repo = await isDirectoryGitRepo(directory)
     if (!repo) return { name: "files", params: to.params }
   }

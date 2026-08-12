@@ -4,8 +4,11 @@ import type {
   AppInfo,
   FileContent,
   FileNode,
+  FileChangeStatus,
   FileStatus,
   GitCommit,
+  GitCommitDetail,
+  GitCommitFile,
   FsEntry,
   MessageWithParts,
   ModelInfo,
@@ -274,10 +277,10 @@ export class OpenCodeClient {
   }
 
   /**
-   * Recent commits. No server build exposes a log endpoint yet, so the named
-   * ones are tried first and git's own on-disk reflog is read when they are
-   * absent — that file is plain text and every build serves it through
-   * `/file/content`.
+   * Recent commits, in descending order of preference: a real log endpoint if a
+   * build ever ships one, then `git log` through the shell endpoint, then git's
+   * own reflog. The reflog is last because a cloned repository has one entry in
+   * it, which is history in name only.
    */
   async getVcsCommits(directory: string, limit = 20, signal?: AbortSignal): Promise<GitCommit[]> {
     try {
@@ -298,7 +301,113 @@ export class OpenCodeClient {
     } catch (error) {
       if (!(error instanceof ApiError && error.kind === "notfound")) throw error
     }
+
+    try {
+      const commits = await this.readGitLog(directory, limit, signal)
+      if (commits.length > 0) return commits
+    } catch (error) {
+      if (error instanceof ApiError && error.kind === "aborted") throw error
+      // A build without the shell endpoint still gets the reflog below.
+    }
+
     return this.readReflogCommits(directory, limit, signal)
+  }
+
+  /**
+   * Run one command on the server and hand back its stdout.
+   *
+   * The shell endpoint belongs to a session, so a session is created for the
+   * call and removed straight after — the command never lands in a
+   * conversation the user is reading. No model runs; the output is the
+   * command's own.
+   */
+  private async runCommand(
+    directory: string,
+    command: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const session = await this.createSession(directory, INTERNAL_SESSION_TITLE, signal)
+    try {
+      const message = await this.request<MessageWithParts>(
+        `/session/${encodeURIComponent(session.id)}/shell`,
+        {
+          method: "POST",
+          query: { directory },
+          body: { command, agent: "build" },
+          signal,
+          timeoutMs: 60_000,
+        },
+      )
+      for (const part of message?.parts ?? []) {
+        if (part.type !== "tool" || part.state?.status !== "completed") continue
+        const output = part.state.output
+        if (typeof output === "string") return output
+      }
+      return ""
+    } finally {
+      // Best effort: a stranded session is noise, but not worth an error.
+      void this.deleteSession(session.id, directory).catch(() => undefined)
+    }
+  }
+
+  /** Commits from `git log`, which is the only source with real depth. */
+  private async readGitLog(
+    directory: string,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<GitCommit[]> {
+    const output = await this.runCommand(
+      directory,
+      `git log --no-color --max-count=${Math.max(1, Math.trunc(limit))} --format=%H%x1f%an%x1f%at%x1f%s%x1f%D`,
+      signal,
+    )
+    return output
+      .split("\n")
+      .map((line) => line.split("\u001f"))
+      .filter((fields) => fields.length >= 4 && /^[0-9a-f]{7,40}$/.test(fields[0] ?? ""))
+      .map(([hash, author, seconds, subject, refs]) => ({
+        hash: hash!,
+        shortHash: hash!.slice(0, 7),
+        subject: subject ?? "",
+        author: author ?? "",
+        date: Number(seconds) * 1_000,
+        refs: (refs ?? "")
+          .split(", ")
+          .map((ref) => ref.trim())
+          .filter(Boolean),
+      }))
+  }
+
+  /** One commit, with the files it touched and their line counts. */
+  async getCommitDetail(
+    directory: string,
+    hash: string,
+    signal?: AbortSignal,
+  ): Promise<GitCommitDetail | null> {
+    if (!isCommitHash(hash)) return null
+    const output = await this.runCommand(
+      directory,
+      `git show --no-color --format=%H%x1f%an%x1f%at%x1f%s%x1f%D --name-status ${hash};` +
+        ` printf '\\036';` +
+        ` git show --no-color --format= --numstat ${hash}`,
+      signal,
+    )
+    return parseCommitDetail(output)
+  }
+
+  /** The patch for one file in one commit, ready for `parseUnifiedDiff`. */
+  async getCommitFileDiff(
+    directory: string,
+    hash: string,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (!isCommitHash(hash)) return ""
+    return this.runCommand(
+      directory,
+      `git show --no-color --format= ${hash} -- ${quoteShellArgument(path)}`,
+      signal,
+    )
   }
 
   /**
@@ -911,6 +1020,86 @@ function normaliseServerEvent(value: unknown): ServerEvent | null {
     sessionID,
     data,
   }
+}
+
+/** The throwaway session a server command runs in, named so it is recognisable. */
+const INTERNAL_SESSION_TITLE = "opencode mobile · internal"
+
+export function isInternalSessionTitle(title: string | undefined): boolean {
+  return title?.trim() === INTERNAL_SESSION_TITLE
+}
+
+function isCommitHash(value: string): boolean {
+  return /^[0-9a-f]{4,40}$/i.test(value)
+}
+
+/** Single-quote for `sh`, which only has to survive an embedded quote. */
+function quoteShellArgument(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+const STATUS_LETTERS: Record<string, FileChangeStatus> = {
+  A: "added",
+  D: "deleted",
+  M: "modified",
+  R: "modified",
+  C: "modified",
+  T: "modified",
+}
+
+/**
+ * `git show --name-status` and `--numstat` cannot be asked for together — the
+ * last flag wins — so the command runs both and separates them with a record
+ * separator. The first section carries the header and each file's status, the
+ * second the line counts for the same paths.
+ */
+function parseCommitDetail(output: string): GitCommitDetail | null {
+  const [statusSection = "", numstatSection = ""] = output.split("\u001e")
+
+  const lines = statusSection.split("\n")
+  const header = lines.find((line) => line.includes("\u001f"))
+  if (!header) return null
+
+  const [hash, author, seconds, subject, refs] = header.split("\u001f")
+  if (!hash || !isCommitHash(hash)) return null
+
+  const counts = new Map<string, { added: number; removed: number }>()
+  for (const line of numstatSection.split("\n")) {
+    const [added, removed, path] = line.split("\t")
+    if (!path) continue
+    counts.set(path.trim(), { added: toCount(added), removed: toCount(removed) })
+  }
+
+  const files: GitCommitFile[] = []
+  for (const line of lines) {
+    const [letter, first, second] = line.split("\t")
+    // A rename reports the old path and the new one; the new one is the file.
+    const path = (second || first)?.trim()
+    if (!letter || !path || letter.includes("\u001f")) continue
+    const status = STATUS_LETTERS[letter.trim().charAt(0).toUpperCase()]
+    if (!status) continue
+    const count = counts.get(path) ?? { added: 0, removed: 0 }
+    files.push({ path, status, added: count.added, removed: count.removed })
+  }
+
+  return {
+    hash,
+    shortHash: hash.slice(0, 7),
+    subject: subject ?? "",
+    author: author ?? "",
+    date: Number(seconds) * 1_000,
+    refs: (refs ?? "")
+      .split(", ")
+      .map((ref) => ref.trim())
+      .filter(Boolean),
+    files,
+  }
+}
+
+/** `-` is what numstat prints for a binary file. */
+function toCount(value: string | undefined): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 /**

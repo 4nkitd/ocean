@@ -106,6 +106,10 @@ function dismissFeedback() {
   pushError.value = null
 }
 
+function openCommit(hash: string) {
+  void router.push(`/p/${encoded}/git/commit/${encodeURIComponent(hash)}`)
+}
+
 function selectView(mode: GitViewMode) {
   viewMode.value = mode
   if (mode === "commits") void refreshCommits()
@@ -134,7 +138,9 @@ onMounted(() => {
       <div class="head__row">
         <div class="head__branch">
           <AppIcon name="git-branch" :size="15" class="head__icon" />
-          <span class="head__name">{{ status?.branch ?? (isRepo ? "working tree" : "no repository") }}</span>
+          <span class="head__name">{{
+            status?.branch ?? (isRepo ? "working tree" : "no repository")
+          }}</span>
         </div>
         <button
           type="button"
@@ -182,8 +188,8 @@ onMounted(() => {
       <div v-if="!isRepo" class="notice">
         <div class="label notice__label">Git unavailable</div>
         <p class="notice__body">
-          No <span class="mono notice__strong">.git</span> directory was found at the working directory. The Git tab
-          stays disabled until one exists.
+          No <span class="mono notice__strong">.git</span> directory was found at the working
+          directory. The Git tab stays disabled until one exists.
         </p>
         <p class="notice__hint">Run git init on the server</p>
       </div>
@@ -267,7 +273,12 @@ onMounted(() => {
               <span>{{ commitsError }}</span>
               <button type="button" @click="refreshCommits()">Retry</button>
             </div>
-            <GitCommitRow v-for="commit in commits" :key="commit.hash" :commit="commit" />
+            <GitCommitRow
+              v-for="commit in commits"
+              :key="commit.hash"
+              :commit="commit"
+              @select="openCommit(commit.hash)"
+            />
           </template>
         </section>
       </template>

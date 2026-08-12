@@ -210,6 +210,18 @@ export interface GitCommit {
   refs: string[]
 }
 
+/** One file touched by a commit, as `git show --name-status --numstat` reports it. */
+export interface GitCommitFile {
+  path: string
+  status: FileChangeStatus
+  added: number
+  removed: number
+}
+
+export interface GitCommitDetail extends GitCommit {
+  files: GitCommitFile[]
+}
+
 export interface GitBranch {
   name: string
   current: boolean

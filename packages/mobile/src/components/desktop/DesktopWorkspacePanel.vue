@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue"
-import type { FileStatus } from "@/api/types"
+import type { FileStatus, GitCommit } from "@/api/types"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import GitCommitRow from "@/components/git/GitCommitRow.vue"
 import TypeBadge from "@/components/ui/TypeBadge.vue"
@@ -17,6 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   openFile: [string]
   openDiff: [string]
+  openCommit: [GitCommit]
   openGit: []
 }>()
 
@@ -253,7 +254,13 @@ onMounted(() => {
               History unavailable
             </div>
             <div v-else-if="!commits.length" class="workspace__state">No commits yet</div>
-            <GitCommitRow v-for="commit in commits" v-else :key="commit.hash" :commit="commit" />
+            <GitCommitRow
+              v-for="commit in commits"
+              v-else
+              :key="commit.hash"
+              :commit="commit"
+              @select="emit('openCommit', commit)"
+            />
           </template>
         </div>
       </template>

@@ -1,6 +1,13 @@
 import { onScopeDispose, ref } from "vue"
 import { ApiError, toUserMessage } from "@/api/errors"
-import type { FileChangeStatus, FileDiff, FileStatus, GitCommit, VcsCommitResult } from "@/api/types"
+import type {
+  FileChangeStatus,
+  FileDiff,
+  FileStatus,
+  GitCommit,
+  GitCommitDetail,
+  VcsCommitResult,
+} from "@/api/types"
 import { parseUnifiedDiff } from "@/lib/diff"
 import { relativeTo } from "@/lib/format"
 import { onServerEvent, requireClient } from "@/stores/connection"
@@ -49,6 +56,11 @@ export function useGit(directory: string) {
   const commitsLoading = ref(false)
   const commitsError = ref<string | null>(null)
 
+  // A commit never changes once written, so both are safe to keep for the
+  // lifetime of the screen — reopening a commit tab costs nothing.
+  const commitCache = new Map<string, GitCommitDetail>()
+  const commitDiffCache = new Map<string, FileDiff>()
+
   // Late responses from a superseded refresh must not overwrite a newer one.
   let statusToken = 0
   let diffToken = 0
@@ -63,7 +75,9 @@ export function useGit(directory: string) {
 
     try {
       const [info, files] = await Promise.all([
-        requireClient().getVcsInfo(directory, signal).catch(() => null),
+        requireClient()
+          .getVcsInfo(directory, signal)
+          .catch(() => null),
         requireClient().fileStatus(directory, signal),
       ])
 
@@ -119,6 +133,26 @@ export function useGit(directory: string) {
     }
   }
 
+  /** One commit and the files it touched. Cached: a tab can be reopened. */
+  async function loadCommit(hash: string): Promise<GitCommitDetail | null> {
+    const cached = commitCache.get(hash)
+    if (cached) return cached
+    const detail = await requireClient().getCommitDetail(directory, hash, signal)
+    if (detail) commitCache.set(hash, detail)
+    return detail
+  }
+
+  /** One file's patch inside a commit, parsed into hunks. */
+  async function loadCommitDiff(hash: string, path: string): Promise<FileDiff> {
+    const key = `${hash}:${path}`
+    const cached = commitDiffCache.get(key)
+    if (cached) return cached
+    const patch = await requireClient().getCommitFileDiff(directory, hash, path, signal)
+    const parsed = parseUnifiedDiff(patch, path)
+    commitDiffCache.set(key, parsed)
+    return parsed
+  }
+
   /**
    * The server's diff is the whole tree in one response; the one file we want
    * is picked out and parsed. A build without `/vcs/diff` falls back to the
@@ -127,7 +161,9 @@ export function useGit(directory: string) {
   async function readPatch(path: string): Promise<string> {
     try {
       const changes = await requireClient().getVcsDiff(directory, "git", signal)
-      const match = changes.find((entry) => relativeTo(directory, entry.file) === relativeTo(directory, path))
+      const match = changes.find(
+        (entry) => relativeTo(directory, entry.file) === relativeTo(directory, path),
+      )
       if (match?.patch.trim()) return match.patch
     } catch (error) {
       if (isAborted(error)) throw error
@@ -190,7 +226,11 @@ export function useGit(directory: string) {
   }
 
   const stopListening = onServerEvent((event) => {
-    if (event.type.startsWith("file.") || event.type.startsWith("vcs.") || event.type.startsWith("message.")) {
+    if (
+      event.type.startsWith("file.") ||
+      event.type.startsWith("vcs.") ||
+      event.type.startsWith("message.")
+    ) {
       schedule()
       return
     }
@@ -221,6 +261,8 @@ export function useGit(directory: string) {
     refreshStatus,
     refreshDiff,
     refreshCommits,
+    loadCommit,
+    loadCommitDiff,
     commit,
     push,
   }
@@ -247,7 +289,10 @@ function explainCommitFailure(text: string): string {
   if (lower.includes("nothing to commit") || lower.includes("no changes added")) {
     return "Nothing is staged, so there is nothing to commit."
   }
-  if (lower.includes("please tell me who you are") || lower.includes("unable to auto-detect email")) {
+  if (
+    lower.includes("please tell me who you are") ||
+    lower.includes("unable to auto-detect email")
+  ) {
     return "git has no identity configured on the server. Set user.name and user.email there first."
   }
   if (lower.includes("not a git repository")) {
@@ -266,7 +311,11 @@ function explainPushFailure(text: string): string {
   if (lower.includes("no upstream") || lower.includes("no configured push destination")) {
     return "This branch has no upstream yet. Set one on the server with git push -u."
   }
-  if (lower.includes("non-fast-forward") || lower.includes("rejected") || lower.includes("fetch first")) {
+  if (
+    lower.includes("non-fast-forward") ||
+    lower.includes("rejected") ||
+    lower.includes("fetch first")
+  ) {
     return "The push was rejected — the remote has commits this branch does not. Pull or rebase on the server first."
   }
   if (

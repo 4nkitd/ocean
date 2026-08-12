@@ -15,10 +15,13 @@ import { connection, onServerEvent, requireClient } from "@/stores/connection"
 
 /** User-chosen card order, by project id. Survives reconnects, hence local. */
 const ORDER_KEY = "opencode.mobile.projectOrder"
+/** Starred project ids. A favourite outranks the manual order. */
+const FAVOURITES_KEY = "opencode.mobile.projectFavourites"
 
 export interface ProjectRow extends ProjectSummary {
   /** True while one of this project's sessions is producing a turn. */
   running: boolean
+  favourite: boolean
 }
 
 /** What `refresh` assembles per project before the running flag is layered on. */
@@ -32,6 +35,7 @@ export function useProjects() {
   const loading = ref(true)
   const error = ref<string | null>(null)
   const order = ref<string[]>(loadOrder())
+  const favourites = ref<Set<string>>(new Set(loadFavourites()))
   /** Sessions the event stream has shown mid-turn since this screen mounted. */
   const runningSessions = ref(new Set<string>())
 
@@ -40,12 +44,32 @@ export function useProjects() {
 
   const projects = computed<ProjectRow[]>(() => {
     const running = runningSessions.value
+    const starred = favourites.value
     const rows = loaded.value.map<ProjectRow>((project) => ({
       ...project,
       running: project.sessionIds.some((id) => running.has(id)),
+      favourite: starred.has(project.id),
     }))
-    return sortByOrder(rows, order.value)
+    // Starred projects float to the top; everything below keeps the order the
+    // user arranged, so pinning never scrambles the rest of the list.
+    const ordered = sortByOrder(rows, order.value)
+    return [
+      ...ordered.filter((project) => project.favourite),
+      ...ordered.filter((project) => !project.favourite),
+    ]
   })
+
+  function toggleFavourite(id: string): void {
+    const next = new Set(favourites.value)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    favourites.value = next
+    try {
+      localStorage.setItem(FAVOURITES_KEY, JSON.stringify([...next]))
+    } catch {
+      // Private browsing refuses writes; the pin still holds for this visit.
+    }
+  }
 
   async function refresh(): Promise<void> {
     controller?.abort()
@@ -120,7 +144,7 @@ export function useProjects() {
     controller?.abort()
   })
 
-  return { loading, error, projects, refresh, move }
+  return { loading, error, projects, refresh, move, toggleFavourite }
 }
 
 // ── loading one project ────────────────────────────────────────────────────
@@ -191,6 +215,17 @@ function fallbackProjects(): Project[] {
 }
 
 // ── ordering ───────────────────────────────────────────────────────────────
+
+function loadFavourites(): string[] {
+  try {
+    const raw = localStorage.getItem(FAVOURITES_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []
+  } catch {
+    return []
+  }
+}
 
 function loadOrder(): string[] {
   try {

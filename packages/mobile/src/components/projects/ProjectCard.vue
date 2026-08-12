@@ -21,7 +21,7 @@ const props = defineProps<{
   canMoveDown: boolean
 }>()
 
-const emit = defineEmits<{ select: []; move: [-1 | 1] }>()
+const emit = defineEmits<{ select: []; move: [-1 | 1]; favourite: [] }>()
 
 function open() {
   if (props.reordering) return
@@ -52,6 +52,19 @@ function open() {
       </span>
 
       <span v-if="!reordering" class="card__trail">
+        <!-- A real control inside the row, so it is stopped from opening it. -->
+        <span
+          class="card__star"
+          :class="{ 'card__star--on': project.favourite }"
+          role="button"
+          tabindex="0"
+          :aria-pressed="project.favourite"
+          :aria-label="project.favourite ? `Unpin ${project.name}` : `Pin ${project.name}`"
+          @click.stop="emit('favourite')"
+          @keydown.enter.stop.prevent="emit('favourite')"
+          @keydown.space.stop.prevent="emit('favourite')"
+          >★</span
+        >
         <!-- The dot is the only running indicator on this screen, so it is
              labelled rather than left as decoration. -->
         <span v-if="project.running" class="card__dot" role="img" aria-label="Session running" />
@@ -205,6 +218,22 @@ function open() {
   height: 8px;
   background: var(--accent);
   display: block;
+}
+
+.card__star {
+  display: block;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.card__star:hover {
+  color: var(--text-muted);
+}
+
+.card__star--on {
+  color: var(--accent);
 }
 
 .card__time {
