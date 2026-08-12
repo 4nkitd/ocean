@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router"
-import { connection, restoreSession } from "@/stores/connection"
+import { connection, isDirectoryGitRepo, restoreSession } from "@/stores/connection"
 
 /**
  * Routes mirror the drill-in hierarchy the design specifies, so the browser's
@@ -114,9 +114,13 @@ router.beforeEach(async (to) => {
     }
   }
 
-  // A directory that isn't a repository has no Git screens to show.
-  if (to.meta.requiresRepo && !connection.isGitRepo.value) {
-    return { name: "files", params: to.params }
+  // A directory that isn't a repository has no Git screens to show. The check
+  // is per-directory: the handshake's flag answers for the server's *current*
+  // project, which on a multi-project server is not the directory in the URL.
+  if (to.meta.requiresRepo) {
+    const directory = typeof to.params.directory === "string" ? decodePathParam(to.params.directory) : ""
+    const repo = await isDirectoryGitRepo(directory)
+    if (!repo) return { name: "files", params: to.params }
   }
 
   return true

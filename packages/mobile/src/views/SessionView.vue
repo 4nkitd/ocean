@@ -15,7 +15,7 @@ import { toUserMessage } from "@/api/errors"
 import type { ModelRef } from "@/api/types"
 import { compactNumber } from "@/lib/format"
 import { decodePathParam, encodePathParam } from "@/router"
-import { connection, requireClient } from "@/stores/connection"
+import { isDirectoryGitRepo, requireClient } from "@/stores/connection"
 import { useSession } from "@/stores/session"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
@@ -167,6 +167,9 @@ function openFile(path: string): void {
 
 // ── navigation ───────────────────────────────────────────────────────────
 
+/** Per-directory — the global current project is not this directory. */
+const isRepo = ref(false)
+
 const tabs = computed<NavTab[]>(() => [
   { id: "files", label: "Files", icon: "folder", to: `${projectPath.value}/files` },
   {
@@ -174,11 +177,22 @@ const tabs = computed<NavTab[]>(() => [
     label: "Git",
     icon: "git-branch",
     to: `${projectPath.value}/git`,
-    disabled: !connection.isGitRepo.value,
+    disabled: !isRepo.value,
     disabledReason: "This directory is not a git repository",
   },
   { id: "chat", label: "Chat", icon: "chat", to: route.fullPath },
 ])
+
+watch(
+  () => directory.value,
+  (value) => {
+    isRepo.value = false
+    void isDirectoryGitRepo(value).then((result) => {
+      if (result) isRepo.value = true
+    })
+  },
+  { immediate: true },
+)
 </script>
 
 <template>

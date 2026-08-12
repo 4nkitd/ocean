@@ -21,7 +21,7 @@ import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
 import StateBlock from "@/components/ui/StateBlock.vue"
 import { basename, displayPath, initials } from "@/lib/format"
 import { decodePathParam, encodePathParam } from "@/router"
-import { connection, onServerEvent, requireClient } from "@/stores/connection"
+import { isDirectoryGitRepo, onServerEvent, requireClient } from "@/stores/connection"
 import { readString, sessionIdOf } from "@/stores/projects"
 
 /**
@@ -234,11 +234,14 @@ const tabs = computed<NavTab[]>(() => [
     label: "Git",
     icon: "git-branch",
     to: `/p/${encodePathParam(directory)}/git`,
-    disabled: !connection.isGitRepo.value,
+    disabled: !isRepo.value,
     disabledReason: "This directory is not a git repository.",
   },
   { id: "chat", label: "Chat", icon: "chat", to: `/p/${encodePathParam(directory)}` },
 ])
+
+/** Resolved per-directory — the global current project is not this directory. */
+const isRepo = ref(false)
 
 function openSession(id: string): void {
   void router.push(`/p/${encodePathParam(directory)}/session/${encodeURIComponent(id)}`)
@@ -261,6 +264,9 @@ async function newSession(): Promise<void> {
 onMounted(() => {
   unsubscribe = onServerEvent(handleEvent)
   void load()
+  void isDirectoryGitRepo(directory).then((value) => {
+    if (value) isRepo.value = true
+  })
 })
 
 onUnmounted(() => {

@@ -17,7 +17,6 @@ import AppIcon from "@/components/ui/AppIcon.vue"
 import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
 import StateBlock from "@/components/ui/StateBlock.vue"
 import { decodePathParam, encodePathParam } from "@/router"
-import { connection } from "@/stores/connection"
 import { toGitFailure, useGit, type CommitResult, type GitFailure } from "@/stores/git"
 
 const route = useRoute()
@@ -27,7 +26,14 @@ const directory = decodePathParam(route.params.directory as string)
 const encoded = encodePathParam(directory)
 const git = useGit(directory)
 
-const isRepo = computed(() => connection.isGitRepo.value)
+/**
+ * Computed from the store's own `/vcs` read, not the handshake: the global
+ * current project is not necessarily this directory, so the handshake flag
+ * would disable the tab on perfectly good repos. Falls back to true when the
+ * store has not answered yet — the screen would have bounced here only if a
+ * repo were plausible, and the store's own status says the rest.
+ */
+const isRepo = computed(() => git.status.value?.isRepo ?? true)
 
 /**
  * Computed, not a plain const: the repository flag resolves from the handshake

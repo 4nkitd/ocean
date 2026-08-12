@@ -7,6 +7,16 @@ Mobile-first web client for a running `opencode serve` process.
 Standalone Vue 3 + Vite + TypeScript SPA — shares no code with the SolidJS
 interface. Talks to the opencode server over its HTTP API and SSE event stream.
 
+## Screenshots
+
+| Projects | Sessions | Chat |
+|---|---|---|
+| ![Projects](docs/screenshots/01-projects.png) | ![Sessions](docs/screenshots/02-sessions.png) | ![Chat](docs/screenshots/03-chat.png) |
+
+| Files | Server | Git |
+|---|---|---|
+| ![Files](docs/screenshots/04-files.png) | ![Server](docs/screenshots/05-server.png) | ![Git](docs/screenshots/06-git.png) |
+
 ## Features
 
 - Connect to any reachable server (LAN or tunneled) with optional basic auth

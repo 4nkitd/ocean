@@ -60,6 +60,25 @@ export const workingDirectory = computed(
 
 export const isGitRepo = computed(() => appInfo.value?.git === true)
 
+/**
+ * Is *this* directory a git repository?
+ *
+ * `appInfo.git` answers for the server's current project, which is not
+ * necessarily the directory being viewed — on a multi-project server the
+ * current project can be the global root while every listed project is a repo.
+ * The authoritative answer for a directory is `GET /vcs`, so screens that gate
+ * the Git tab on it resolve it per-directory.
+ */
+export async function isDirectoryGitRepo(directory: string, signal?: AbortSignal): Promise<boolean> {
+  if (!client.value) return false
+  try {
+    const info = await client.value.getVcsInfo(directory, signal)
+    return Boolean(info?.branch || info?.default_branch)
+  } catch {
+    return false
+  }
+}
+
 /** `192.168.1.24:4096 · ravi`, the header's server context line. */
 export const serverLabel = computed(() => {
   if (!client.value) return ""

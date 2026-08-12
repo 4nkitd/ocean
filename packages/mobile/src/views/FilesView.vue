@@ -16,7 +16,7 @@ import StateBlock from "@/components/ui/StateBlock.vue"
 import FileTreeRow from "@/components/files/FileTreeRow.vue"
 import { basename, displayPath } from "@/lib/format"
 import { decodePathParam, encodePathParam } from "@/router"
-import { connection, requireClient } from "@/stores/connection"
+import { connection, isDirectoryGitRepo, requireClient } from "@/stores/connection"
 import { useFileTree } from "@/stores/files"
 import { useRoute, useRouter } from "vue-router"
 
@@ -51,7 +51,7 @@ const crumbs = computed(() => {
 
 const contextLine = computed(() => {
   const parts = [displayPath(directory), `${fileCount.value} files`]
-  if (!connection.isGitRepo.value) parts.push("not a repository")
+  if (!isRepo.value) parts.push("not a repository")
   return parts.join(" · ")
 })
 
@@ -181,6 +181,9 @@ function goToCrumb(path: string) {
 const chatTarget = ref(`/p/${encodePathParam(directory)}`)
 const sessionsController = new AbortController()
 
+/** Per-directory: the global current project is not this directory. */
+const isRepo = ref(false)
+
 onMounted(async () => {
   if (typeof route.query.reveal === "string") {
     const target = route.query.reveal
@@ -197,6 +200,10 @@ onMounted(async () => {
     // The rail still works without this: Chat falls back to the project screen,
     // where a session can be started.
   }
+
+  void isDirectoryGitRepo(directory).then((value) => {
+    if (value) isRepo.value = true
+  })
 })
 
 onUnmounted(() => sessionsController.abort())
@@ -207,9 +214,9 @@ const tabs = computed<NavTab[]>(() => [
     id: "git",
     label: "Git",
     icon: "git-branch",
-    to: connection.isGitRepo.value ? `/p/${encodePathParam(directory)}/git` : undefined,
-    disabled: !connection.isGitRepo.value,
-    disabledReason: connection.isGitRepo.value ? undefined : "this directory is not a git repository",
+    to: isRepo.value ? `/p/${encodePathParam(directory)}/git` : undefined,
+    disabled: !isRepo.value,
+    disabledReason: isRepo.value ? undefined : "this directory is not a git repository",
   },
   { id: "chat", label: "Chat", icon: "chat", to: chatTarget.value },
 ])
@@ -315,7 +322,7 @@ const tabs = computed<NavTab[]>(() => [
       </div>
 
       <!-- Screen 12: the Git tab is disabled, so the reason for it lives here. -->
-      <section v-if="!connection.isGitRepo.value" class="callout" aria-labelledby="git-unavailable">
+      <section v-if="!isRepo" class="callout" aria-labelledby="git-unavailable">
         <h2 id="git-unavailable" class="label callout__kicker">Git unavailable</h2>
         <p class="callout__body">
           No <span class="callout__code">.git</span> directory was found at the working directory. The Git tab stays

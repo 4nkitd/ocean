@@ -16,7 +16,7 @@ import CodeViewer from "@/components/files/CodeViewer.vue"
 import { isBinary, languageFor } from "@/lib/filetype"
 import { basename, dirname, formatBytes, relativeTo } from "@/lib/format"
 import { decodePathParam, encodePathParam } from "@/router"
-import { connection, requireClient } from "@/stores/connection"
+import { isDirectoryGitRepo, requireClient } from "@/stores/connection"
 import { useRoute, useRouter } from "vue-router"
 import type { FileChangeStatus } from "@/api/types"
 
@@ -84,7 +84,8 @@ async function load() {
 
 /** Working-tree state for this one file, for the footer and the hunk tinting. */
 async function loadGitState() {
-  if (!connection.isGitRepo.value) return
+  const isRepo = await isDirectoryGitRepo(directory, controller.signal).catch(() => false)
+  if (!isRepo) return
   try {
     const entries = await requireClient().fileStatus(directory, controller.signal)
     const match = entries.find((entry) => absolute(entry.path) === path)
