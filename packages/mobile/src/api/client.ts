@@ -14,6 +14,7 @@ import type {
   ModelInfo,
   ModelRef,
   Project,
+  PromptAttachment,
   ServerCredentials,
   ServerEvent,
   Session,
@@ -583,6 +584,7 @@ export class OpenCodeClient {
       modelID?: string
       variant?: string
       agent?: string
+      attachments?: PromptAttachment[]
       signal?: AbortSignal
     } = {},
   ): Promise<MessageWithParts | null> {
@@ -602,7 +604,18 @@ export class OpenCodeClient {
         method: "POST",
         query: { directory: options.directory },
         body: {
-          parts: [{ type: "text", text }],
+          // Images lead, so the model has them in hand before the instruction
+          // that refers to them. `mime`/`url` is the server's file-part input
+          // shape; the bytes ride along as a data URL, there is no upload step.
+          parts: [
+            ...(options.attachments ?? []).map((attachment) => ({
+              type: "file",
+              mime: attachment.mime,
+              filename: attachment.filename,
+              url: attachment.url,
+            })),
+            ...(text ? [{ type: "text", text }] : []),
+          ],
           ...(model
             ? {
                 model: {

@@ -103,14 +103,22 @@ onUnmounted(() => {
 <template>
   <aside class="sessions" aria-label="Sessions">
     <header class="sessions__head">
-      <div class="sessions__brand"><span class="sessions__mark" /> <span>opencode</span></div>
+      <div class="sessions__topline">
+        <div class="sessions__brand"><span class="sessions__mark" /> <span>opencode</span></div>
 
-      <!-- The way back out of a project. Without it the only route to the
-           project list is the browser's back button. -->
-      <button type="button" class="sessions__up" @click="emit('projects')">
-        <AppIcon name="grid" :size="13" />
-        <span>All projects</span>
-      </button>
+        <!-- The way back out of a project. Without it the only route to the
+             project list is the browser's back button. Icon-only, so the label
+             lives on the title/aria-label instead. -->
+        <button
+          type="button"
+          class="sessions__up"
+          aria-label="All projects"
+          title="All projects"
+          @click="emit('projects')"
+        >
+          <AppIcon name="grid" :size="14" />
+        </button>
+      </div>
 
       <h2 class="sessions__project">{{ basename(directory) }}</h2>
       <p class="sessions__path">{{ displayPath(directory) }}</p>
@@ -194,10 +202,18 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--rule);
 }
 
+.sessions__topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .sessions__brand {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 10px;
@@ -213,13 +229,14 @@ onUnmounted(() => {
 }
 
 .sessions__up {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 7px;
-  margin-top: 14px;
+  justify-content: center;
+  /* Pads the 14px glyph out to a proper hit target without moving the row. */
+  margin: -6px;
+  padding: 6px;
   color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
 }
 
 .sessions__up:hover {

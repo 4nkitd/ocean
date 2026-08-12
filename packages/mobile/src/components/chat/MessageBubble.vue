@@ -108,6 +108,13 @@ const userText = computed(() => {
   return fromParts || (props.message.draft ?? "")
 })
 
+/** Attached images, shown above the prompt they belong to. */
+const images = computed(() =>
+  props.message.parts.filter(
+    (part) => part.type === "file" && part.url && (part.mime ?? "").startsWith("image/"),
+  ),
+)
+
 /** True while the message's turn has not completed — reasoning still streams. */
 const turnActive = computed(() => !props.message.info.time.completed)
 
@@ -161,7 +168,12 @@ const awaitingOutput = computed(
     </div>
 
     <template v-if="isUser">
-      <p class="bubble">{{ userText }}</p>
+      <ul v-if="images.length" class="shots">
+        <li v-for="image in images" :key="image.id" class="shots__item">
+          <img :src="image.url" :alt="image.filename ?? 'Attached image'" loading="lazy" />
+        </li>
+      </ul>
+      <p v-if="userText" class="bubble">{{ userText }}</p>
       <p v-if="message.failure" class="turn__failure">Not sent — {{ message.failure }}</p>
       <button
         v-if="message.delivery === 'failed'"
@@ -242,6 +254,29 @@ const awaitingOutput = computed(
 
 .turn__label--accent {
   color: var(--accent);
+}
+
+.shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 86%;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.shots__item {
+  border: 2px solid var(--rule);
+  background: var(--surface-sunken);
+  line-height: 0;
+}
+
+.shots__item img {
+  /* Capped so a tall screenshot cannot push the rest of the turn off screen. */
+  max-width: 180px;
+  max-height: 180px;
+  object-fit: contain;
 }
 
 .bubble {

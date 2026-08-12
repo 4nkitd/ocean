@@ -12,7 +12,7 @@
 import { computed, nextTick, onUnmounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { toUserMessage } from "@/api/errors"
-import type { GitCommit, ModelRef } from "@/api/types"
+import type { GitCommit, ModelRef, PromptAttachment } from "@/api/types"
 import CommitDetail from "@/components/git/CommitDetail.vue"
 import DesktopSessionSidebar from "@/components/desktop/DesktopSessionSidebar.vue"
 import DesktopFilePreview from "@/components/desktop/DesktopFilePreview.vue"
@@ -192,11 +192,11 @@ const showJump = computed(() => !following.value && messages.value.length > 0)
 
 // ── actions ──────────────────────────────────────────────────────────────
 
-function onSend(text: string): void {
+function onSend(text: string, attachments: PromptAttachment[]): void {
   // A new prompt is always worth following, wherever the user had scrolled to.
   following.value = true
   void nextTick(() => scrollToBottom())
-  void send(text)
+  void send(text, attachments)
 }
 
 function openFile(path: string): void {

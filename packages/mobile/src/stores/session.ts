@@ -1,6 +1,13 @@
 import { computed, onUnmounted, ref, toValue, watch, type MaybeRefOrGetter } from "vue"
 import { isApiError, toUserMessage } from "@/api/errors"
-import type { MessageInfo, MessageWithParts, ModelRef, Part, ServerEvent } from "@/api/types"
+import type {
+  MessageInfo,
+  MessageWithParts,
+  ModelRef,
+  Part,
+  PromptAttachment,
+  ServerEvent,
+} from "@/api/types"
 import { onServerEvent, requireClient } from "@/stores/connection"
 
 /**
@@ -22,6 +29,8 @@ export interface SessionMessage extends MessageWithParts {
   failure: string | null
   /** The prompt text, kept so a failed turn can be resent without retyping. */
   draft: string | null
+  /** The images that went with `draft`, kept for the same reason. */
+  draftAttachments: PromptAttachment[]
 }
 
 /**
@@ -89,6 +98,7 @@ export function useSession(
       delivery: "sent",
       failure: null,
       draft: null,
+      draftAttachments: [],
     }
   }
 
@@ -171,11 +181,16 @@ export function useSession(
     for (const local of messages.value.filter(
       (message) => isLocalId(message.info.id) && message.delivery !== "failed",
     )) {
-      const draft = local.draft?.trim()
-      if (!draft) continue
+      const draft = local.draft?.trim() ?? ""
+      // An images-only turn has no text to match on, so the attachment count
+      // stands in for it — otherwise the local bubble would never be reconciled
+      // and would sit beside the server's copy of the same turn.
+      if (!draft && local.draftAttachments.length === 0) continue
       const match = serverUsers.find(
         (candidate) =>
           messageText(candidate) === draft &&
+          candidate.parts.filter((part) => part.type === "file").length ===
+            local.draftAttachments.length &&
           candidate.info.time.created >= local.info.time.created - 5_000,
       )
       if (match) removeMessage(local.info.id)
@@ -493,6 +508,7 @@ export function useSession(
         modelID: model.value?.modelID,
         variant: model.value?.variant,
         agent: agent.value ?? undefined,
+        attachments: message.draftAttachments,
         signal: requestController.signal,
       })
       message.delivery = "sent"
@@ -515,18 +531,32 @@ export function useSession(
   }
 
   /** Optimistic: the bubble is on screen before the request leaves the phone. */
-  async function send(text: string): Promise<void> {
+  async function send(text: string, attachments: PromptAttachment[] = []): Promise<void> {
     const body = text.trim()
-    if (!body || loading.value || sending.value || busy.value) return
+    // An image on its own is a legitimate prompt — "what is this?" is implied.
+    if ((!body && attachments.length === 0) || loading.value || sending.value || busy.value) return
 
     const id = `${LOCAL_PREFIX}${Date.now()}:${localCounter++}`
     const sid = toValue(sessionId)
+    const parts: Part[] = attachments.map((attachment) => ({
+      id: `${id}:file:${attachment.id}`,
+      messageID: id,
+      sessionID: sid,
+      type: "file",
+      mime: attachment.mime,
+      filename: attachment.filename,
+      url: attachment.url,
+    }))
+    if (body)
+      parts.push({ id: `${id}:text`, messageID: id, sessionID: sid, type: "text", text: body })
+
     const optimistic: SessionMessage = {
       info: { id, sessionID: sid, role: "user", time: { created: Date.now() } },
-      parts: [{ id: `${id}:text`, messageID: id, sessionID: sid, type: "text", text: body }],
+      parts,
       delivery: "sending",
       failure: null,
       draft: body,
+      draftAttachments: attachments,
     }
     insertMessage(optimistic)
     await deliver(optimistic)

@@ -148,6 +148,20 @@ export interface Part {
   synthetic?: boolean
 }
 
+/**
+ * An image the user attached to a prompt, held as a `data:` URL.
+ *
+ * The server takes the bytes inline on the prompt body rather than through a
+ * separate upload, so there is nothing to clean up if the send fails.
+ */
+export interface PromptAttachment {
+  /** Client-side only, for keying the thumbnail list and removal. */
+  id: string
+  mime: string
+  filename: string
+  url: string
+}
+
 /** A message and its parts, which is how every screen wants to consume it. */
 export interface MessageWithParts {
   info: MessageInfo
