@@ -2,6 +2,7 @@ import { ApiError } from "./errors"
 import type {
   AgentInfo,
   AppInfo,
+  CommandInfo,
   FileContent,
   FileNode,
   FileChangeStatus,
@@ -9,12 +10,16 @@ import type {
   GitCommit,
   GitCommitDetail,
   GitCommitFile,
+  InboxDelivery,
+  InboxItem,
   McpServer,
   MessageInfo,
   MessageWithParts,
   ModelInfo,
   ModelRef,
   Part,
+  PermissionReply,
+  PermissionRequest,
   Project,
   PromptAttachment,
   ServerCredentials,
@@ -460,7 +465,12 @@ export class OpenCodeClient {
 
   async listProjects(signal?: AbortSignal): Promise<Project[]> {
     const result = await this.request<RawProject[]>("/project", { signal, optional: true })
-    return (result ?? []).filter((project) => project.id !== "global").map(toProject)
+    return (result ?? [])
+      .map(toProject)
+      // v2 keeps a `global` project for anything outside a known root. It is
+      // only noise when it has no real directory behind it — when it does, it
+      // is the directory the server was started in and belongs on the screen.
+      .filter((project) => project.worktree && project.worktree !== "/")
   }
 
   async getCurrentProject(directory?: string, signal?: AbortSignal): Promise<Project | null> {
@@ -512,6 +522,40 @@ export class OpenCodeClient {
         typeof status === "string" ? { type: status } : { type: status?.type ?? "busy" },
       ]),
     )
+  }
+
+  /**
+   * Every session working right now, across every project on this server.
+   *
+   * `/api/session/active` answers with ids and nothing else, so each one is
+   * resolved to a real session — the screen has to name the project and the
+   * conversation, not an id. A session that has since gone away is dropped
+   * rather than shown as a blank row.
+   */
+  async listActiveSessions(signal?: AbortSignal): Promise<Session[]> {
+    const statuses = await this.getSessionStatuses(undefined, signal)
+    const ids = Object.entries(statuses ?? {})
+      .filter(([, status]) => status.type && status.type !== "idle")
+      .map(([id]) => id)
+    if (ids.length === 0) return []
+
+    const sessions = await Promise.all(
+      ids.map((id) => this.getSession(id, undefined, signal).catch(() => null)),
+    )
+    return sessions.filter((session): session is Session => session !== null)
+  }
+
+  /** Every request waiting on a human, across the sessions this server runs. */
+  async listPendingPermissions(
+    directory?: string,
+    signal?: AbortSignal,
+  ): Promise<PermissionRequest[]> {
+    const result = await this.data<PermissionRequest[]>("/permission/request", {
+      query: at(directory),
+      signal,
+      optional: true,
+    })
+    return result ?? []
   }
 
   async createSession(directory?: string, title?: string, signal?: AbortSignal): Promise<Session> {
@@ -566,25 +610,36 @@ export class OpenCodeClient {
       variant?: string
       agent?: string
       attachments?: PromptAttachment[]
+      /**
+       * How to deliver it when the session is mid-turn. `queue` waits for the
+       * turn to end, `steer` cuts into it. Omitted for an idle session, which
+       * runs the prompt immediately.
+       */
+      delivery?: InboxDelivery
       signal?: AbortSignal
     } = {},
   ): Promise<void> {
     const encoded = encodeURIComponent(sessionId)
 
-    // v2 sets the agent and model on the session, not on the prompt.
-    if (options.agent) await this.switchAgent(sessionId, options.agent)
-    if (options.providerID && options.modelID) {
-      await this.switchModel(sessionId, {
-        providerID: options.providerID,
-        modelID: options.modelID,
-        variant: options.variant,
-      })
+    // v2 sets the agent and model on the session, not on the prompt. Skipped
+    // for a queued prompt: the running turn owns the session's settings until
+    // it ends, and changing them underneath it would apply to the wrong turn.
+    if (!options.delivery) {
+      if (options.agent) await this.switchAgent(sessionId, options.agent)
+      if (options.providerID && options.modelID) {
+        await this.switchModel(sessionId, {
+          providerID: options.providerID,
+          modelID: options.modelID,
+          variant: options.variant,
+        })
+      }
     }
 
     await this.request(`/session/${encoded}/prompt`, {
       method: "POST",
       body: {
         text,
+        ...(options.delivery ? { delivery: options.delivery } : {}),
         // The bytes ride along as a data URL — there is no upload step.
         ...(options.attachments?.length
           ? {
@@ -598,6 +653,71 @@ export class OpenCodeClient {
       signal: options.signal,
       timeoutMs: 60_000,
     })
+  }
+
+  // ── commands ────────────────────────────────────────────────────────────
+
+  /** The saved prompts this project can run, which is what `/` offers. */
+  async listCommands(directory?: string, signal?: AbortSignal): Promise<CommandInfo[]> {
+    const result = await this.data<CommandInfo[]>("/command", {
+      query: at(directory),
+      signal,
+      optional: true,
+    })
+    return (result ?? []).filter((command) => !!command.name)
+  }
+
+  /**
+   * Run one. The server expands the template — `$ARGUMENTS` and all — so the
+   * client sends the name and the rest of the line, never the expansion.
+   */
+  async runCommand(
+    sessionId: string,
+    command: string,
+    args: string,
+    options: { delivery?: InboxDelivery; signal?: AbortSignal } = {},
+  ): Promise<void> {
+    await this.request(`/session/${encodeURIComponent(sessionId)}/command`, {
+      method: "POST",
+      body: {
+        command,
+        ...(args ? { arguments: args } : {}),
+        ...(options.delivery ? { delivery: options.delivery } : {}),
+      },
+      signal: options.signal,
+      timeoutMs: 60_000,
+    })
+  }
+
+  // ── inbox ───────────────────────────────────────────────────────────────
+
+  /** Prompts admitted while the agent was busy, still waiting their turn. */
+  async listInbox(sessionId: string, signal?: AbortSignal): Promise<InboxItem[]> {
+    const result = await this.data<RawInboxItem[]>(
+      `/session/${encodeURIComponent(sessionId)}/inbox`,
+      { signal, optional: true },
+    )
+    return (result ?? []).map(toInboxItem)
+  }
+
+  /** Drop a queued prompt before it runs. */
+  async cancelInbox(sessionId: string, inboxId: string): Promise<void> {
+    await this.request(
+      `/session/${encodeURIComponent(sessionId)}/inbox/${encodeURIComponent(inboxId)}`,
+      { method: "DELETE" },
+    )
+  }
+
+  /** Move a waiting prompt between "after this turn" and "cut in now". */
+  async setInboxDelivery(
+    sessionId: string,
+    inboxId: string,
+    delivery: InboxDelivery,
+  ): Promise<void> {
+    await this.request(
+      `/session/${encodeURIComponent(sessionId)}/inbox/${encodeURIComponent(inboxId)}/${delivery}`,
+      { method: "POST" },
+    )
   }
 
   async abortSession(sessionId: string, _directory?: string): Promise<void> {
@@ -707,6 +827,39 @@ export class OpenCodeClient {
       }))
   }
 
+  /**
+   * What a prompt runs as when the session has not been told otherwise.
+   *
+   * A fresh v2 session carries no agent or model of its own — the server picks
+   * at prompt time. The composer has to name something, and "whatever the
+   * server would pick" is the only honest answer, so it is read rather than
+   * guessed.
+   */
+  async getDefaults(
+    directory?: string,
+    signal?: AbortSignal,
+  ): Promise<{ model: ModelRef | null; agent: string | null }> {
+    const [model, agents] = await Promise.all([
+      this.data<{ id?: string; modelID?: string; providerID?: string; variant?: string }>(
+        "/model/default",
+        { query: at(directory), signal, optional: true },
+      ).catch(() => null),
+      this.listAgents(directory, signal).catch(() => [] as AgentInfo[]),
+    ])
+
+    const modelID = model?.modelID ?? model?.id
+    // Primary agents are the ones a session can actually run under; the server
+    // lists them in its own order of preference, so the first is the default.
+    const agent = agents.find((entry) => entry.mode === "primary") ?? agents[0]
+    return {
+      model:
+        modelID && model?.providerID
+          ? { providerID: model.providerID, modelID, variant: model.variant }
+          : null,
+      agent: agent?.id ?? null,
+    }
+  }
+
   /** Point a session at a different agent. */
   async switchAgent(sessionId: string, agent: string, _directory?: string): Promise<void> {
     await this.request(`/session/${encodeURIComponent(sessionId)}/agent`, {
@@ -727,6 +880,36 @@ export class OpenCodeClient {
         },
       },
     })
+  }
+
+  // ── permissions ─────────────────────────────────────────────────────────
+
+  /**
+   * What this session is blocked on right now.
+   *
+   * Fetched on load as well as watched on the stream: a request raised before
+   * the screen opened is exactly the case that leaves an agent stuck, so it has
+   * to survive a reconnect rather than only arriving as an event.
+   */
+  async listPermissions(sessionId: string, signal?: AbortSignal): Promise<PermissionRequest[]> {
+    const result = await this.data<PermissionRequest[]>(
+      `/session/${encodeURIComponent(sessionId)}/permission`,
+      { signal, optional: true },
+    )
+    return result ?? []
+  }
+
+  /** Answer one request. `always` saves the decision for the rest of the session. */
+  async replyPermission(
+    sessionId: string,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string,
+  ): Promise<void> {
+    await this.request(
+      `/session/${encodeURIComponent(sessionId)}/permission/${encodeURIComponent(requestId)}/reply`,
+      { method: "POST", body: { reply, ...(message ? { message } : {}) } },
+    )
   }
 
   // ── mcp ─────────────────────────────────────────────────────────────────
@@ -929,6 +1112,15 @@ interface RawModel {
 interface RawMcp {
   name: string
   status?: { status?: string; error?: string }
+}
+
+interface RawInboxItem {
+  id: string
+  sessionID?: string
+  timeCreated?: number
+  type?: string
+  delivery?: string
+  payload?: { text?: string; files?: unknown[] }
 }
 
 type RawToolState =
@@ -1182,6 +1374,18 @@ function toProject(project: RawProject): Project {
     vcs: project.vcs === "git" ? "git" : null,
     time: project.time,
     directories: project.sandboxes?.length ? project.sandboxes : [worktree],
+  }
+}
+
+export function toInboxItem(item: RawInboxItem): InboxItem {
+  return {
+    id: item.id,
+    sessionID: item.sessionID ?? "",
+    timeCreated: item.timeCreated ?? Date.now(),
+    type: item.type ?? "user",
+    text: item.payload?.text ?? "",
+    delivery: item.delivery === "steer" ? "steer" : "queue",
+    attachments: Array.isArray(item.payload?.files) ? item.payload.files.length : 0,
   }
 }
 

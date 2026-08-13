@@ -12,7 +12,13 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router"
 import { toUserMessage } from "@/api/errors"
-import type { GitCommit, ModelRef, PromptAttachment } from "@/api/types"
+import type {
+  CommandInfo,
+  GitCommit,
+  ModelRef,
+  PermissionReply,
+  PromptAttachment,
+} from "@/api/types"
 import CommitDetail from "@/components/git/CommitDetail.vue"
 import DesktopSessionSidebar from "@/components/desktop/DesktopSessionSidebar.vue"
 import DesktopFilePreview from "@/components/desktop/DesktopFilePreview.vue"
@@ -22,13 +28,16 @@ import { basename, compactNumber } from "@/lib/format"
 import { decodePathParam, encodePathParam } from "@/router"
 import { connection, isDirectoryGitRepo, requireClient } from "@/stores/connection"
 import { useSession } from "@/stores/session"
+import { useScreenShortcuts } from "@/stores/shortcuts"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
 import StateBlock from "@/components/ui/StateBlock.vue"
 import MessageBubble from "@/components/chat/MessageBubble.vue"
 import ModelAgentSheet from "@/components/chat/ModelAgentSheet.vue"
 import McpSheet from "@/components/mcp/McpSheet.vue"
+import PermissionCard from "@/components/chat/PermissionCard.vue"
 import PromptComposer from "@/components/chat/PromptComposer.vue"
+import QueuedPrompts from "@/components/chat/QueuedPrompts.vue"
 
 const route = useRoute()
 const router = useRouter()
@@ -60,16 +69,52 @@ const {
   error,
   sending,
   isStreaming,
+  permissions,
+  queued,
+  deliveryMode,
   title,
   send,
   retry,
   abort,
   reload,
+  respondPermission,
+  runCommand,
+  cancelQueued,
+  setQueuedDelivery,
   agent,
   model,
   setAgent,
   setModel,
 } = useSession(sessionId, directory)
+
+/** The agent answers one request at a time, so only the oldest is actionable. */
+const blocking = computed(() => permissions.value[0] ?? null)
+
+async function onPermissionReply(id: string, reply: PermissionReply): Promise<void> {
+  try {
+    await respondPermission(id, reply)
+  } catch {
+    // The store puts the card back; there is nothing else useful to say.
+  }
+}
+
+/**
+ * The keys this screen claims. `a` and `d` only mean anything while something
+ * is blocked, which is exactly when reaching for the mouse is most annoying.
+ */
+useScreenShortcuts({
+  c: () => document.querySelector<HTMLTextAreaElement>(".box__field")?.focus(),
+  n: () => void startNewSession(),
+  a: () => {
+    if (blocking.value) void onPermissionReply(blocking.value.id, "once")
+  },
+  d: () => {
+    if (blocking.value) void onPermissionReply(blocking.value.id, "reject")
+  },
+  escape: () => {
+    if (isStreaming.value) void abort()
+  },
+})
 
 // ── agent / model selector ─────────────────────────────────────────────────
 
@@ -77,15 +122,14 @@ const sheetOpen = ref(false)
 const mcpOpen = ref(false)
 
 /** `build · deepseek-v4-flash` — the composer's one-line summary. */
-const selectorLabel = computed(() => {
-  const parts: string[] = []
-  if (agent.value) parts.push(agent.value)
-  if (model.value) {
-    const name = model.value.modelID
-    parts.push(model.value.variant ? `${name} (${model.value.variant})` : name)
-  }
-  return parts.join(" · ") || "agent · model"
+/** The model the next prompt runs on, for the composer's own control bar. */
+const modelLabel = computed(() => {
+  if (!model.value) return null
+  const name = model.value.modelID
+  return model.value.variant ? `${name} (${model.value.variant})` : name
 })
+
+const agentLabel = computed(() => agent.value)
 
 function onSheetChange(next: ModelRef | null): void {
   if (next) void setModel(next)
@@ -194,10 +238,29 @@ const showJump = computed(() => !following.value && messages.value.length > 0)
 
 // ── actions ──────────────────────────────────────────────────────────────
 
+const commands = ref<CommandInfo[]>([])
+
+async function loadCommands(): Promise<void> {
+  commands.value = await requireClient()
+    .listCommands(directory.value)
+    .catch(() => [] as CommandInfo[])
+}
+
 function onSend(text: string, attachments: PromptAttachment[]): void {
   // A new prompt is always worth following, wherever the user had scrolled to.
   following.value = true
   void nextTick(() => scrollToBottom())
+
+  // `/name rest of line` is a command, not a prompt — but only when the server
+  // actually has that command; otherwise it is just a message starting with a
+  // slash, and swallowing it would lose the user's text.
+  const match = /^\/(\S+)\s*([\s\S]*)$/.exec(text.trim())
+  const command = match ? commands.value.find((entry) => entry.name === match[1]) : undefined
+  if (command && attachments.length === 0) {
+    void runCommand(command.name, match![2] ?? "")
+    return
+  }
+
   void send(text, attachments)
 }
 
@@ -258,6 +321,7 @@ onMounted(() => {
   desktopQuery = window.matchMedia("(min-width: 1080px)")
   isDesktop.value = desktopQuery.matches
   desktopQuery.addEventListener("change", onDesktopChange)
+  void loadCommands()
 })
 
 onUnmounted(() => desktopQuery?.removeEventListener("change", onDesktopChange))
@@ -351,6 +415,16 @@ watch(
         </div>
 
         <div class="head__actions">
+          <button
+            v-if="!isDesktop"
+            type="button"
+            class="head__action"
+            aria-label="MCP servers"
+            title="MCP servers"
+            @click="mcpOpen = true"
+          >
+            <AppIcon name="mcp" :size="18" />
+          </button>
           <button
             type="button"
             class="head__action"
@@ -476,37 +550,31 @@ watch(
           </button>
         </div>
 
-        <div class="selectors">
-          <button
-            type="button"
-            class="selector"
-            :aria-label="'Agent and model: ' + selectorLabel"
-            @click="sheetOpen = true"
-          >
-            <AppIcon name="git-branch" :size="13" class="selector__icon" />
-            <span class="selector__label">{{ selectorLabel }}</span>
-            <AppIcon name="chevron-up-down" :size="14" class="selector__chevron" />
-          </button>
+        <QueuedPrompts
+          :items="queued"
+          @cancel="cancelQueued"
+          @delivery="setQueuedDelivery"
+        />
 
-          <!-- Desktop reaches MCP through the workspace tab instead. -->
-          <button
-            v-if="!isDesktop"
-            type="button"
-            class="selectors__settings"
-            aria-label="MCP servers"
-            title="MCP servers"
-            @click="mcpOpen = true"
-          >
-            <AppIcon name="gear" :size="15" />
-          </button>
-        </div>
+        <PermissionCard
+          v-if="blocking"
+          :request="blocking"
+          :pending="permissions.length"
+          @reply="onPermissionReply"
+        />
 
         <PromptComposer
           :sending="sending"
           :streaming="isStreaming"
-          :disabled="loading || !!error || isStreaming"
+          :disabled="loading || !!error"
+          :model-label="modelLabel"
+          :agent-label="agentLabel"
+          :delivery="deliveryMode"
+          :commands="commands"
           @send="onSend"
           @abort="abort"
+          @selectors="sheetOpen = true"
+          @update:delivery="deliveryMode = $event"
         />
 
         <ModelAgentSheet

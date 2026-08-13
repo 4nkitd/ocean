@@ -317,6 +317,50 @@ export interface ServerEvent {
   data: Record<string, unknown>
 }
 
+/** `GET /api/command` — a saved prompt template the session can run. */
+export interface CommandInfo {
+  name: string
+  description?: string
+  /** The prompt it expands to; `$ARGUMENTS` is where the rest of the line goes. */
+  template: string
+  agent?: string
+  subtask?: boolean
+}
+
+/** `GET /api/session/{id}/inbox` — a prompt admitted but not yet delivered. */
+export interface InboxItem {
+  id: string
+  sessionID: string
+  timeCreated: number
+  type: string
+  text: string
+  /** `queue` runs after the current turn; `steer` cuts into it. */
+  delivery: InboxDelivery
+  attachments: number
+}
+
+export type InboxDelivery = "steer" | "queue"
+
+/**
+ * `permission.asked` / `GET /api/session/{id}/permission` — the agent is
+ * blocked until this is answered.
+ */
+export interface PermissionRequest {
+  id: string
+  sessionID: string
+  /** What it wants to do: `edit`, `bash`, `webfetch`, `external_directory`… */
+  action: string
+  /** What it wants to do it to — a path, a command, a URL. */
+  resources: string[]
+  /** The patterns an `always` answer would save. */
+  save?: string[]
+  metadata?: Record<string, unknown>
+  /** The tool call that raised it, for pointing at the right turn. */
+  source?: { type: string; messageID: string; id: string }
+}
+
+export type PermissionReply = "once" | "always" | "reject"
+
 /** `GET /api/agent` — one agent the session can run under. */
 export interface AgentInfo {
   id: string

@@ -2,10 +2,14 @@ import { computed, onUnmounted, ref, toValue, watch, type MaybeRefOrGetter } fro
 import { toolOutput } from "@/api/client"
 import { isApiError, toUserMessage } from "@/api/errors"
 import type {
+  InboxDelivery,
+  InboxItem,
   MessageInfo,
   MessageWithParts,
   ModelRef,
   Part,
+  PermissionReply,
+  PermissionRequest,
   PromptAttachment,
   ServerEvent,
   TokenUsage,
@@ -48,6 +52,40 @@ function isLocalId(id: string): boolean {
   return id.startsWith(LOCAL_PREFIX)
 }
 
+/**
+ * What the user last ran in this directory.
+ *
+ * A new v2 session starts with no agent or model of its own, so without this
+ * every new session would open on the server's default and the choice would
+ * have to be made again. Kept per directory: a different repo is usually a
+ * different kind of work.
+ */
+const PREFERENCE_KEY = "opencode.mobile.lastRun"
+
+interface RunPreference {
+  agent?: string
+  model?: ModelRef
+}
+
+function loadPreference(directory: string | undefined): RunPreference {
+  if (!directory) return {}
+  try {
+    const raw = localStorage.getItem(`${PREFERENCE_KEY}:${directory}`)
+    return raw ? (JSON.parse(raw) as RunPreference) : {}
+  } catch {
+    return {}
+  }
+}
+
+function savePreference(directory: string | undefined, preference: RunPreference): void {
+  if (!directory) return
+  try {
+    localStorage.setItem(`${PREFERENCE_KEY}:${directory}`, JSON.stringify(preference))
+  } catch {
+    // Private browsing refuses writes; the choice still holds for this session.
+  }
+}
+
 export function useSession(
   sessionId: MaybeRefOrGetter<string>,
   directory: MaybeRefOrGetter<string | undefined>,
@@ -62,6 +100,19 @@ export function useSession(
   /** What the server is doing when that is more than "busy" — a retry, say. */
   const statusNote = ref<string | null>(null)
   const activeAssistantId = ref<string | null>(null)
+  /**
+   * Requests the agent is blocked on. Oldest first: the agent asks one at a
+   * time, and answering the oldest is what unblocks it.
+   */
+  const permissions = ref<PermissionRequest[]>([])
+  /**
+   * Prompts admitted while the agent was mid-turn. v2 holds them in a session
+   * inbox and delivers them when the turn ends, which is what makes it possible
+   * to line up the next instruction instead of waiting at the screen.
+   */
+  const queued = ref<InboxItem[]>([])
+  /** How the next prompt goes out while the agent is busy. */
+  const deliveryMode = ref<InboxDelivery>("queue")
 
   /** The agent this session runs under, for the composer's selector. */
   const agent = ref<string | null>(null)
@@ -646,6 +697,72 @@ export function useSession(
         return
       }
 
+      case "permission.asked": {
+        const id = str(data.id)
+        if (!id || permissions.value.some((request) => request.id === id)) return
+        permissions.value = [
+          ...permissions.value,
+          {
+            id,
+            sessionID: sid,
+            action: str(data.action) ?? "run",
+            resources: Array.isArray(data.resources)
+              ? data.resources.filter((entry): entry is string => typeof entry === "string")
+              : [],
+            save: Array.isArray(data.save)
+              ? data.save.filter((entry): entry is string => typeof entry === "string")
+              : undefined,
+            metadata: record(data.metadata) ?? undefined,
+          },
+        ]
+        return
+      }
+
+      case "permission.replied": {
+        // Answered here, from the desktop, or by a saved rule — all the same.
+        const requestID = str(data.requestID)
+        permissions.value = permissions.value.filter((request) => request.id !== requestID)
+        return
+      }
+
+      case "session.inbox.enqueued": {
+        const inboxID = str(data.inboxID)
+        const item = record(data.item)
+        if (!inboxID || queued.value.some((entry) => entry.id === inboxID)) return
+        const payload = record(item?.payload)
+        queued.value = [
+          ...queued.value,
+          {
+            id: inboxID,
+            sessionID: sid,
+            timeCreated: Date.now(),
+            type: str(item?.type) ?? "user",
+            text: str(payload?.text) ?? "",
+            delivery: str(item?.delivery) === "steer" ? "steer" : "queue",
+            attachments: Array.isArray(payload?.files) ? payload.files.length : 0,
+          },
+        ]
+        return
+      }
+
+      case "session.inbox.delivered":
+      case "session.inbox.cancelled": {
+        const inboxID = str(data.inboxID)
+        queued.value = queued.value.filter((entry) => entry.id !== inboxID)
+        // Delivery turns it into a real message; the transcript needs to catch up.
+        if (event.type === "session.inbox.delivered") void sync()
+        return
+      }
+
+      case "session.inbox.delivery.changed": {
+        const inboxID = str(data.inboxID)
+        const delivery = str(data.delivery) === "steer" ? "steer" : "queue"
+        queued.value = queued.value.map((entry) =>
+          entry.id === inboxID ? { ...entry, delivery } : entry,
+        )
+        return
+      }
+
       default:
     }
   }
@@ -663,20 +780,46 @@ export function useSession(
     error.value = null
     try {
       const client = requireClient()
-      const [history, detail, statuses] = await Promise.all([
+      const [history, detail, statuses, pending, inbox] = await Promise.all([
         client.listMessages(sid, dir, requestController.signal),
         client.getSession(sid, dir, requestController.signal).catch(() => null),
         client.getSessionStatuses(dir, requestController.signal).catch(() => null),
+        client.listPermissions(sid, requestController.signal).catch(() => []),
+        client.listInbox(sid, requestController.signal).catch(() => []),
       ])
       if (token !== loadToken || requestController.signal.aborted) return
       mergeHistory(history)
+      permissions.value = pending
+      queued.value = inbox
       title.value = detail?.title?.trim() || null
-      if (detail?.agent) agent.value = detail.agent
-      const modelID = detail?.model?.modelID ?? detail?.model?.id
-      const providerID = detail?.model?.providerID ?? detail?.model?.provider
-      if (modelID && providerID) {
-        model.value = { providerID, modelID, variant: detail?.model?.variant }
+
+      /*
+       * Three sources, in descending order of authority: what the session is
+       * already set to, what the user last ran in this directory, and what the
+       * server would pick on its own. Without the last two a new session shows
+       * an empty selector and the choice has to be made again every time.
+       */
+      const remembered = loadPreference(dir)
+      const sessionModelID = detail?.model?.modelID ?? detail?.model?.id
+      const sessionProviderID = detail?.model?.providerID ?? detail?.model?.provider
+
+      agent.value = detail?.agent ?? remembered.agent ?? null
+      model.value =
+        sessionModelID && sessionProviderID
+          ? {
+              providerID: sessionProviderID,
+              modelID: sessionModelID,
+              variant: detail?.model?.variant,
+            }
+          : (remembered.model ?? null)
+
+      if (!agent.value || !model.value) {
+        const defaults = await client.getDefaults(dir, requestController.signal).catch(() => null)
+        if (token !== loadToken) return
+        agent.value = agent.value ?? defaults?.agent ?? null
+        model.value = model.value ?? defaults?.model ?? null
       }
+
       const status = statuses?.[sid]?.type
       busy.value = status === "busy" || status === "retry"
     } catch (cause) {
@@ -724,7 +867,10 @@ export function useSession(
     message.delivery = "sending"
     message.failure = null
     sending.value = true
-    busy.value = true
+    // A prompt sent into a running turn is queued, not started — the turn in
+    // flight owns `busy` until it ends.
+    const queueing = busy.value
+    if (!queueing) busy.value = true
 
     try {
       // The prompt is only *admitted* here — the turn arrives on the stream.
@@ -735,16 +881,20 @@ export function useSession(
         variant: model.value?.variant,
         agent: agent.value ?? undefined,
         attachments: message.draftAttachments,
+        ...(queueing ? { delivery: deliveryMode.value } : {}),
         signal: requestController.signal,
       })
       message.delivery = "sent"
+      // Queued prompts live in the inbox strip, not the transcript: the server
+      // has not turned them into messages yet, and showing both would double.
+      if (queueing) removeMessage(message.info.id)
     } catch (cause) {
       // Unmount aborts the request; the screen is gone, so there is nobody to
       // tell and no failed bubble worth keeping.
       if (isApiError(cause) && cause.kind === "aborted") return
       message.delivery = "failed"
       message.failure = toUserMessage(cause)
-      busy.value = false
+      if (!queueing) busy.value = false
     } finally {
       if (promptController === requestController) promptController = null
       sending.value = false
@@ -755,7 +905,8 @@ export function useSession(
   async function send(text: string, attachments: PromptAttachment[] = []): Promise<void> {
     const body = text.trim()
     // An image on its own is a legitimate prompt — "what is this?" is implied.
-    if ((!body && attachments.length === 0) || loading.value || sending.value || busy.value) return
+    // Sending mid-turn is allowed: it queues.
+    if ((!body && attachments.length === 0) || loading.value || sending.value) return
 
     const id = `${LOCAL_PREFIX}${Date.now()}:${localCounter++}`
     const sid = toValue(sessionId)
@@ -809,6 +960,73 @@ export function useSession(
     }
   }
 
+  /**
+   * Answer the request the agent is blocked on. The row goes away immediately —
+   * `permission.replied` confirms it, but the agent resumes either way and the
+   * card must not sit there looking unanswered.
+   */
+  async function respondPermission(requestId: string, reply: PermissionReply): Promise<void> {
+    const request = permissions.value.find((candidate) => candidate.id === requestId)
+    if (!request) return
+    permissions.value = permissions.value.filter((candidate) => candidate.id !== requestId)
+    try {
+      await requireClient().replyPermission(toValue(sessionId), requestId, reply)
+    } catch (cause) {
+      // Put it back: an unanswered request is the whole reason this screen
+      // exists, so failing quietly would be the worst outcome.
+      permissions.value = [...permissions.value, request].sort((left, right) =>
+        left.id.localeCompare(right.id),
+      )
+      throw cause
+    }
+  }
+
+  /**
+   * Run a `/command`. The server owns the template — the client sends the name
+   * and whatever followed it, never the expansion.
+   */
+  async function runCommand(name: string, args: string): Promise<void> {
+    if (loading.value || sending.value) return
+    const sid = toValue(sessionId)
+    const queueing = busy.value
+    sending.value = true
+    if (!queueing) busy.value = true
+    try {
+      await requireClient().runCommand(sid, name, args, {
+        ...(queueing ? { delivery: deliveryMode.value } : {}),
+      })
+    } catch (cause) {
+      if (!queueing) busy.value = false
+      error.value = toUserMessage(cause)
+    } finally {
+      sending.value = false
+    }
+  }
+
+  /** Drop a waiting prompt before the agent gets to it. */
+  async function cancelQueued(inboxId: string): Promise<void> {
+    const previous = queued.value
+    queued.value = queued.value.filter((entry) => entry.id !== inboxId)
+    try {
+      await requireClient().cancelInbox(toValue(sessionId), inboxId)
+    } catch {
+      queued.value = previous
+    }
+  }
+
+  /** Move a waiting prompt between "after this turn" and "cut in now". */
+  async function setQueuedDelivery(inboxId: string, delivery: InboxDelivery): Promise<void> {
+    const previous = queued.value
+    queued.value = queued.value.map((entry) =>
+      entry.id === inboxId ? { ...entry, delivery } : entry,
+    )
+    try {
+      await requireClient().setInboxDelivery(toValue(sessionId), inboxId, delivery)
+    } catch {
+      queued.value = previous
+    }
+  }
+
   /** Switch the session's agent; the next prompt runs under it. */
   async function setAgent(next: string): Promise<void> {
     const previous = agent.value
@@ -816,6 +1034,7 @@ export function useSession(
     agent.value = next
     try {
       await requireClient().switchAgent(toValue(sessionId), next)
+      savePreference(toValue(directory), { agent: next, model: model.value ?? undefined })
     } catch (cause) {
       agent.value = previous
       throw cause
@@ -833,6 +1052,7 @@ export function useSession(
     model.value = next
     try {
       await requireClient().switchModel(toValue(sessionId), next)
+      savePreference(toValue(directory), { agent: agent.value ?? undefined, model: next })
     } catch (cause) {
       model.value = previous
       throw cause
@@ -856,6 +1076,8 @@ export function useSession(
       title.value = null
       agent.value = null
       model.value = null
+      permissions.value = []
+      queued.value = []
       sending.value = false
       busy.value = false
       statusNote.value = null
@@ -879,6 +1101,9 @@ export function useSession(
     sending,
     isStreaming,
     statusNote,
+    permissions,
+    queued,
+    deliveryMode,
     title,
     agent,
     model,
@@ -886,6 +1111,10 @@ export function useSession(
     retry,
     abort,
     reload,
+    respondPermission,
+    runCommand,
+    cancelQueued,
+    setQueuedDelivery,
     setAgent,
     setModel,
   }

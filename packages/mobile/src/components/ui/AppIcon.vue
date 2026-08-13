@@ -11,6 +11,8 @@ import { computed } from "vue"
 
 export type IconName =
   | "arrow-right"
+  | "arrow-up"
+  | "mcp"
   | "arrow-left"
   | "chevron-down"
   | "chevron-right"
@@ -48,6 +50,7 @@ const props = withDefaults(
 
 const paths: Record<IconName, string> = {
   "arrow-right": '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  "arrow-up": '<path d="M12 19V5M6 11l6-6 6 6"/>',
   "arrow-left": '<path d="M19 12H5M11 6l-6 6 6 6"/>',
   "chevron-down": '<path d="M6 9l6 6 6-6"/>',
   "chevron-right": '<path d="M9 6l6 6-6 6"/>',
@@ -75,18 +78,28 @@ const paths: Record<IconName, string> = {
   refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
   upload: '<path d="M12 19V5M6 11l6-6 6 6"/><path d="M4 21h16"/>',
   alert: '<path d="M12 3L2 20h20L12 3z"/><path d="M12 10v4M12 17v.5"/>',
+  // The Model Context Protocol mark, kept at the artwork's own 195 grid (see
+  // `viewBoxes`) rather than re-traced by hand — the curves are the logo.
+  mcp:
+    '<path d="M25 97.8528L92.8823 29.9706C102.255 20.598 117.451 20.598 126.823 29.9706C136.196 39.3431 136.196 54.5391 126.823 63.9117L75.5581 115.177"/><path d="M76.2653 114.47L126.823 63.9117C136.196 54.5391 151.392 54.5391 160.765 63.9117C170.491 73.6378 170.491 88.8338 161.118 98.2063L99.7248 159.6C96.6006 162.724 96.6006 167.789 99.7248 170.913L112.331 183.52"/>',
+}
+
+/** Glyphs drawn on their own grid instead of the set's 24 units. */
+const viewBoxes: Partial<Record<IconName, string>> = {
+  mcp: "18 15 160 178",
 }
 
 const markup = computed(() => paths[props.name])
+const viewBox = computed(() => viewBoxes[props.name] ?? "0 0 24 24")
 </script>
 
 <template>
   <svg
     class="icon"
-    :class="{ 'icon--filled': filled }"
+    :class="{ 'icon--filled': filled, 'icon--round': props.name === 'mcp' }"
     :width="size"
     :height="size"
-    viewBox="0 0 24 24"
+    :viewBox="viewBox"
     aria-hidden="true"
     focusable="false"
     v-html="markup"
@@ -94,6 +107,8 @@ const markup = computed(() => paths[props.name])
 </template>
 
 <style scoped>
+
+
 .icon {
   flex: none;
   display: block;
@@ -107,5 +122,13 @@ const markup = computed(() => paths[props.name])
 .icon--filled {
   fill: currentColor;
   stroke: none;
+}
+
+/* Drawn from arcs on a 195 grid: it needs round ends and a stroke scaled to
+   that grid, and both have to outrank `.icon` above. */
+.icon.icon--round {
+  stroke-width: 15;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 </style>

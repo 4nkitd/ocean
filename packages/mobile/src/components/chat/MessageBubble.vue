@@ -10,13 +10,17 @@
  * Model output is never trusted as markup. It is parsed into tokens here and
  * rendered through Vue bindings — no `v-html` touches anything the model wrote.
  */
-import { computed } from "vue"
+import { computed, ref } from "vue"
 import type { Part } from "@/api/types"
 import type { SessionMessage } from "@/stores/session"
+import ImageLightbox from "@/components/ui/ImageLightbox.vue"
 import ToolCard from "./ToolCard.vue"
 
 const props = defineProps<{ message: SessionMessage }>()
 const emit = defineEmits<{ open: [path: string]; retry: [id: string] }>()
+
+/** The attached image being looked at full size, if any. */
+const preview = ref<Part | null>(null)
 
 // ── minimal markdown ───────────────────────────────────────────────────────
 
@@ -206,7 +210,14 @@ const awaitingOutput = computed(
     <template v-else-if="isUser">
       <ul v-if="images.length" class="shots">
         <li v-for="image in images" :key="image.id" class="shots__item">
-          <img :src="image.url" :alt="image.filename ?? 'Attached image'" loading="lazy" />
+          <button
+            type="button"
+            class="shots__zoom"
+            :aria-label="`Preview ${image.filename ?? 'attached image'}`"
+            @click="preview = image"
+          >
+            <img :src="image.url" :alt="image.filename ?? 'Attached image'" loading="lazy" />
+          </button>
         </li>
       </ul>
       <p v-if="userText" class="bubble">{{ userText }}</p>
@@ -266,6 +277,14 @@ const awaitingOutput = computed(
       <p v-if="assistantError" class="turn__failure">{{ assistantError }}</p>
       <p v-else-if="awaitingOutput" class="turn__waiting">Thinking…</p>
     </template>
+
+    <ImageLightbox
+      v-if="preview"
+      :src="preview.url!"
+      :alt="preview.filename"
+      :caption="preview.filename"
+      @close="preview = null"
+    />
   </article>
 </template>
 
@@ -331,6 +350,17 @@ const awaitingOutput = computed(
   max-width: 180px;
   max-height: 180px;
   object-fit: contain;
+}
+
+.shots__zoom {
+  display: block;
+  padding: 0;
+  line-height: 0;
+  cursor: zoom-in;
+}
+
+.shots__zoom:hover {
+  opacity: 0.85;
 }
 
 .bubble {
