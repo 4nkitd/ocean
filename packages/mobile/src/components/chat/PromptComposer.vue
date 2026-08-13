@@ -432,6 +432,25 @@ const canSend = computed(
     (text.value.trim().length > 0 || attachments.value.length > 0),
 )
 
+/**
+ * With nothing to send, the send button is dead weight — so it becomes the
+ * microphone instead, and turns back into send the moment there is anything to
+ * send. One button, because the bar has no room for two and the phone keyboard
+ * is the thing being avoided in the first place.
+ */
+const micMode = computed(
+  () =>
+    voiceSupported &&
+    !props.sending &&
+    text.value.trim().length === 0 &&
+    attachments.value.length === 0,
+)
+
+function onPrimary(): void {
+  if (micMode.value) toggleDictation()
+  else submit()
+}
+
 /** Mid-turn the placeholder has to say where the prompt is going. */
 const placeholder = computed(() => {
   if (!props.streaming) return "Ask anything, @ for files"
@@ -652,20 +671,6 @@ function onKeydown(event: KeyboardEvent): void {
         </button>
 
         <button
-          v-if="voiceSupported"
-          type="button"
-          class="bar__icon"
-          :class="{ 'bar__icon--on': listening }"
-          :aria-label="listening ? 'Stop dictation' : 'Dictate the prompt'"
-          :aria-pressed="listening"
-          :title="listening ? 'Stop dictation' : 'Dictate'"
-          :disabled="disabled"
-          @click="toggleDictation"
-        >
-          <AppIcon name="mic" :size="16" />
-        </button>
-
-        <button
           type="button"
           class="bar__pick"
           :aria-label="`Model: ${modelLabel ?? 'default'}. Change model`"
@@ -717,12 +722,22 @@ function onKeydown(event: KeyboardEvent): void {
         <button
           type="button"
           class="bar__send"
-          :aria-label="streaming ? 'Queue prompt' : 'Send prompt'"
-          :disabled="!canSend"
-          @click="submit"
+          :class="{ 'bar__send--listening': listening }"
+          :aria-label="
+            micMode
+              ? listening
+                ? 'Stop dictation'
+                : 'Dictate a prompt'
+              : streaming
+                ? 'Queue prompt'
+                : 'Send prompt'
+          "
+          :aria-pressed="micMode ? listening : undefined"
+          :disabled="micMode ? disabled : !canSend"
+          @click="onPrimary"
         >
           <AppIcon
-            :name="sending ? 'spinner' : 'arrow-up'"
+            :name="sending ? 'spinner' : micMode ? 'mic' : 'arrow-up'"
             :size="17"
             :class="{ composer__spin: sending }"
           />
@@ -951,17 +966,6 @@ function onKeydown(event: KeyboardEvent): void {
   opacity: 0.4;
 }
 
-.bar__icon--on {
-  color: var(--accent);
-  animation: listening 1.4s ease-in-out infinite;
-}
-
-@keyframes listening {
-  50% {
-    opacity: 0.45;
-  }
-}
-
 .bar__pick {
   display: flex;
   align-items: center;
@@ -1045,6 +1049,21 @@ function onKeydown(event: KeyboardEvent): void {
 
 .bar__send:disabled {
   opacity: 0.4;
+}
+
+/* Listening has to be obvious from across the room: the fill inverts and
+   breathes, so a mic left recording in a pocket is not a silent surprise. */
+.bar__send--listening {
+  background: var(--surface-sunken);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  animation: listening 1.4s ease-in-out infinite;
+}
+
+@keyframes listening {
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .composer__spin {
