@@ -30,6 +30,9 @@ interface. Talks to the opencode server over its HTTP API and SSE event stream.
 - File tree with lazy loading, filter, and code viewer with changed-line tint
 - Git screens: status, diff and commit history from the server's read-only VCS
   API, with commit/push run as real `git` through the server's shell endpoint
+- Terminal drawer on <kbd>Ctrl</kbd>+<kbd>`</kbd> (or the button beside the
+  session title): commands run through the server's shell endpoint with output
+  streamed live, `Ctrl+C` to kill, and `cd` tracked between commands
 - Multi-server management, PWA manifest, dark Modernist design system
 
 ## Setup
