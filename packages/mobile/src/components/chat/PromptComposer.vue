@@ -44,8 +44,8 @@ const props = withDefaults(
 const emit = defineEmits<{
   send: [text: string, attachments: PromptAttachment[]]
   abort: []
-  /** Open the agent / model sheet. */
-  selectors: []
+  /** Open the picker sheet on one of its sections. */
+  selectors: [section: "model" | "agent"]
   "update:delivery": [delivery: InboxDelivery]
 }>()
 
@@ -375,8 +375,8 @@ function onKeydown(event: KeyboardEvent): void {
         <button
           type="button"
           class="bar__pick"
-          :aria-label="`Model: ${modelLabel ?? 'default'}. Change model or agent`"
-          @click="emit('selectors')"
+          :aria-label="`Model: ${modelLabel ?? 'default'}. Change model`"
+          @click="emit('selectors', 'model')"
         >
           <span class="bar__value">{{ modelLabel ?? "default model" }}</span>
           <AppIcon name="chevron-up-down" :size="12" class="bar__caret" />
@@ -385,8 +385,8 @@ function onKeydown(event: KeyboardEvent): void {
         <button
           type="button"
           class="bar__pick bar__pick--agent"
-          :aria-label="`Agent: ${agentLabel ?? 'default'}. Change model or agent`"
-          @click="emit('selectors')"
+          :aria-label="`Agent: ${agentLabel ?? 'default'}. Change agent`"
+          @click="emit('selectors', 'agent')"
         >
           <span class="bar__value">{{ agentLabel ?? "default" }}</span>
           <AppIcon name="chevron-up-down" :size="12" class="bar__caret" />

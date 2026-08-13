@@ -1,11 +1,12 @@
 <script setup lang="ts">
 /**
- * Choosing the agent and model a session runs under.
+ * Choosing the agent or the model a session runs under.
  *
- * A bottom sheet with two sections: agents on top, models below (each with
- * its variants as chips when the server reports any). The current choices are
- * marked with a 2px accent rule; tapping another one applies the change to the
- * session immediately, so the next prompt runs under it.
+ * One bottom sheet, opened as either the agent picker or the model picker via
+ * the `section` prop (models carry variant chips when the server reports any).
+ * The current choice is marked with a 2px accent rule; tapping another one
+ * applies the change to the session immediately, so the next prompt runs
+ * under it.
  */
 import { computed, onMounted, ref } from "vue"
 import type { AgentInfo, ModelInfo, ModelRef } from "@/api/types"
@@ -17,6 +18,8 @@ const props = defineProps<{
   sessionId: string
   agent: string | null
   model: ModelRef | null
+  /** Which picker this sheet is: the agent list or the model list. */
+  section: "model" | "agent"
 }>()
 
 const emit = defineEmits<{
@@ -89,12 +92,8 @@ async function load() {
   error.value = null
   try {
     const client = requireClient()
-    const [agentList, modelList] = await Promise.all([
-      client.listAgents(props.directory),
-      client.listModels(props.directory),
-    ])
-    agents.value = agentList
-    models.value = modelList
+    if (props.section === "agent") agents.value = await client.listAgents(props.directory)
+    else models.value = await client.listModels(props.directory)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Could not load agents and models."
   } finally {
@@ -152,7 +151,9 @@ onMounted(() => {
       @keydown="onKeydown"
     >
       <header class="sheet__head">
-        <h2 id="model-agent-title" class="label sheet__kicker">Agent and model</h2>
+        <h2 id="model-agent-title" class="label sheet__kicker">
+          {{ section === "agent" ? "Agent" : "Model" }}
+        </h2>
         <button type="button" class="sheet__close" aria-label="Close" @click="emit('close')">
           <AppIcon name="close" :size="18" />
         </button>
@@ -161,14 +162,13 @@ onMounted(() => {
       <div class="sheet__body scroll-y">
         <p v-if="loading" class="note">
           <AppIcon name="spinner" :size="14" class="note__spin" />
-          Reading the server's agents and models…
+          Reading the server's {{ section === "agent" ? "agents" : "models" }}…
         </p>
 
         <p v-else-if="error" class="note note--error" role="alert">{{ error }}</p>
 
         <template v-else>
-          <section class="group">
-            <h3 class="label group__title">Agent</h3>
+          <section v-if="section === 'agent'" class="group">
             <p v-if="runnableAgents.length === 0" class="note">
               No agents to choose from — the server's default is used.
             </p>
@@ -190,8 +190,7 @@ onMounted(() => {
             </button>
           </section>
 
-          <section class="group">
-            <h3 class="label group__title">Model</h3>
+          <section v-if="section === 'model'" class="group">
             <p v-if="models.length === 0" class="note">
               No models to choose from — the server's default is used.
             </p>
@@ -292,11 +291,6 @@ onMounted(() => {
 
 .group {
   border-bottom: 2px solid var(--rule);
-}
-
-.group__title {
-  padding: var(--space-3) var(--space-5);
-  background: var(--surface-raised);
 }
 
 .row {

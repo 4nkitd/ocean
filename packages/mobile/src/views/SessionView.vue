@@ -118,7 +118,7 @@ useScreenShortcuts({
 
 // ── agent / model selector ─────────────────────────────────────────────────
 
-const sheetOpen = ref(false)
+const sheetSection = ref<"model" | "agent" | null>(null)
 const mcpOpen = ref(false)
 
 /** `build · deepseek-v4-flash` — the composer's one-line summary. */
@@ -133,12 +133,12 @@ const agentLabel = computed(() => agent.value)
 
 function onSheetChange(next: ModelRef | null): void {
   if (next) void setModel(next)
-  sheetOpen.value = false
+  sheetSection.value = null
 }
 
 function onAgentChange(next: string): void {
   void setAgent(next)
-  sheetOpen.value = false
+  sheetSection.value = null
 }
 
 // ── header ───────────────────────────────────────────────────────────────
@@ -297,7 +297,7 @@ function openDesktopCommit(commit: GitCommit): void {
 function openDesktopTab(tab: DesktopTab): void {
   if (!desktopTabs.value.some((existing) => existing.id === tab.id)) desktopTabs.value.push(tab)
   activeDesktopTab.value = tab.id
-  sheetOpen.value = false
+  sheetSection.value = null
 }
 
 function isDesktopViewport(): boolean {
@@ -573,17 +573,18 @@ watch(
           :commands="commands"
           @send="onSend"
           @abort="abort"
-          @selectors="sheetOpen = true"
+          @selectors="sheetSection = $event"
           @update:delivery="deliveryMode = $event"
         />
 
         <ModelAgentSheet
-          v-if="sheetOpen"
+          v-if="sheetSection"
           :directory="directory"
           :session-id="sessionId"
           :agent="agent"
           :model="model"
-          @close="sheetOpen = false"
+          :section="sheetSection"
+          @close="sheetSection = null"
           @change="onSheetChange"
           @agent-change="onAgentChange"
         />
