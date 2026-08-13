@@ -9,6 +9,11 @@
  */
 import { RouterView } from "vue-router"
 import ErrorBoundary from "@/components/ui/ErrorBoundary.vue"
+import ShortcutSheet from "@/components/ui/ShortcutSheet.vue"
+import { useShortcuts } from "@/stores/shortcuts"
+
+/** Mounted once here so `?` and the `g` prefix work on every screen. */
+const { helpOpen } = useShortcuts()
 </script>
 
 <template>
@@ -28,6 +33,8 @@ import ErrorBoundary from "@/components/ui/ErrorBoundary.vue"
         </RouterView>
       </ErrorBoundary>
     </main>
+
+    <ShortcutSheet v-if="helpOpen" @close="helpOpen = false" />
   </div>
 </template>
 
