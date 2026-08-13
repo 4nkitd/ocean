@@ -9,7 +9,15 @@
  * looking for". Both modes live here rather than in two components so the
  * transition between them is a single boolean.
  */
-import { computed, nextTick, onBeforeUpdate, onMounted, onUnmounted, ref, useTemplateRef } from "vue"
+import {
+  computed,
+  nextTick,
+  onBeforeUpdate,
+  onMounted,
+  onUnmounted,
+  ref,
+  useTemplateRef,
+} from "vue"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
 import StateBlock from "@/components/ui/StateBlock.vue"
@@ -26,8 +34,20 @@ const router = useRouter()
 const directory = decodePathParam(route.params.directory)
 const projectName = computed(() => basename(directory) || "project")
 
-const { rows, loading, error, query, filterActive, fileCount, expandedCount, refresh, toggle, collapseAll, reveal, setFilter } =
-  useFileTree(directory)
+const {
+  rows,
+  loading,
+  error,
+  query,
+  filterActive,
+  fileCount,
+  expandedCount,
+  refresh,
+  toggle,
+  collapseAll,
+  reveal,
+  setFilter,
+} = useFileTree(directory)
 
 /** Where the breadcrumb points — the deepest directory the user has opened. */
 const currentPath = ref(directory)
@@ -50,7 +70,7 @@ const crumbs = computed(() => {
 })
 
 const contextLine = computed(() => {
-  const parts = [displayPath(directory), `${fileCount.value} files`]
+  const parts = [displayPath(directory), `${fileCount.value} files loaded`]
   if (!isRepo.value) parts.push("not a repository")
   return parts.join(" · ")
 })
@@ -195,7 +215,8 @@ onMounted(async () => {
   try {
     const sessions = await requireClient().listSessions(directory, sessionsController.signal)
     const newest = [...sessions].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))[0]
-    if (newest) chatTarget.value = `/p/${encodePathParam(directory)}/session/${encodeURIComponent(newest.id)}`
+    if (newest)
+      chatTarget.value = `/p/${encodePathParam(directory)}/session/${encodeURIComponent(newest.id)}`
   } catch {
     // The rail still works without this: Chat falls back to the project screen,
     // where a session can be started.
@@ -229,7 +250,13 @@ const tabs = computed<NavTab[]>(() => [
         <div class="head__context">
           <span class="head__dot" aria-hidden="true" />
           <span class="label head__server">{{ connection.serverLabel.value }}</span>
-          <button type="button" class="head__icon" aria-label="All projects" title="All projects" @click="goProjects">
+          <button
+            type="button"
+            class="head__icon"
+            aria-label="All projects"
+            title="All projects"
+            @click="goProjects"
+          >
             <AppIcon name="grid" :size="18" />
           </button>
           <button type="button" class="head__icon" aria-label="Filter files" @click="openFilter">
@@ -291,7 +318,11 @@ const tabs = computed<NavTab[]>(() => [
     <div class="scroll-y body">
       <StateBlock v-if="error" variant="error" label="Tree" :message="error" @retry="refresh" />
 
-      <StateBlock v-if="loading && rows.length === 0" variant="loading" message="Listing the working directory…" />
+      <StateBlock
+        v-if="loading && rows.length === 0"
+        variant="loading"
+        message="Listing the working directory…"
+      />
 
       <StateBlock
         v-else-if="rows.length === 0 && filterActive"
@@ -325,10 +356,12 @@ const tabs = computed<NavTab[]>(() => [
       <section v-if="!isRepo" class="callout" aria-labelledby="git-unavailable">
         <h2 id="git-unavailable" class="label callout__kicker">Git unavailable</h2>
         <p class="callout__body">
-          No <span class="callout__code">.git</span> directory was found at the working directory. The Git tab stays
-          disabled until one exists.
+          No <span class="callout__code">.git</span> directory was found at the working directory.
+          The Git tab stays disabled until one exists.
         </p>
-        <p class="callout__hint">Run <span class="callout__code callout__code--hint">git init</span> on the server</p>
+        <p class="callout__hint">
+          Run <span class="callout__code callout__code--hint">git init</span> on the server
+        </p>
       </section>
     </div>
 

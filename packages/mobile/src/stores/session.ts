@@ -1,7 +1,9 @@
 import { computed, onUnmounted, ref, toValue, watch, type MaybeRefOrGetter } from "vue"
-import { toolOutput } from "@/api/client"
+import { toFormRequest, toolOutput } from "@/api/client"
 import { isApiError, toUserMessage } from "@/api/errors"
 import type {
+  FormAnswer,
+  FormRequest,
   InboxDelivery,
   InboxItem,
   MessageInfo,
@@ -109,6 +111,7 @@ export function useSession(
    */
   const permissions = ref<PermissionRequest[]>([])
   const questions = ref<QuestionRequest[]>([])
+  const forms = ref<FormRequest[]>([])
   /**
    * Prompts admitted while the agent was mid-turn. v2 holds them in a session
    * inbox and delivers them when the turn ends, which is what makes it possible
@@ -196,9 +199,7 @@ export function useSession(
     )
     for (const local of messages.value.filter(
       (message) =>
-        isLocalId(message.info.id) &&
-        message.info.role === "user" &&
-        message.delivery !== "failed",
+        isLocalId(message.info.id) && message.info.role === "user" && message.delivery !== "failed",
     )) {
       const draft = local.draft?.trim() ?? ""
       // An images-only turn has no text to match on, so the attachment count
@@ -308,10 +309,7 @@ export function useSession(
   }
 
   /** Text and reasoning are addressed by their ordinal inside the message. */
-  function textPart(
-    data: Record<string, unknown>,
-    type: "text" | "reasoning",
-  ): Part | undefined {
+  function textPart(data: Record<string, unknown>, type: "text" | "reasoning"): Part | undefined {
     const messageID = str(data.assistantMessageID)
     const ordinal = num(data.ordinal)
     if (!messageID || ordinal === null) return undefined
@@ -341,9 +339,7 @@ export function useSession(
     const messageID = str(data.assistantMessageID)
     if (!messageID) {
       for (const message of messages.value) {
-        const found = message.parts.find(
-          (part) => part.type === "tool" && part.callID === callID,
-        )
+        const found = message.parts.find((part) => part.type === "tool" && part.callID === callID)
         if (found) return found
       }
       return undefined
@@ -433,9 +429,7 @@ export function useSession(
     if (
       messages.value.some(
         (message) =>
-          isLocalId(message.info.id) &&
-          message.info.role === "user" &&
-          message.delivery === "sent",
+          isLocalId(message.info.id) && message.info.role === "user" && message.delivery === "sent",
       )
     )
       void sync()
@@ -543,8 +537,7 @@ export function useSession(
         if (!delta) return
         const part = toolPart(data)
         if (!part) return
-        const previous =
-          part.state?.status === "streaming" ? (part.state.inputText ?? "") : ""
+        const previous = part.state?.status === "streaming" ? (part.state.inputText ?? "") : ""
         part.state = { status: "streaming", inputText: `${previous}${delta}` }
         return
       }
@@ -660,7 +653,9 @@ export function useSession(
         busy.value = true
         const attempt = num(data.attempt)
         const reason = str(record(data.error)?.message) ?? "the turn failed"
-        statusNote.value = attempt ? `retrying (attempt ${attempt}) — ${reason}` : `retrying — ${reason}`
+        statusNote.value = attempt
+          ? `retrying (attempt ${attempt}) — ${reason}`
+          : `retrying — ${reason}`
         return
       }
 
@@ -743,6 +738,21 @@ export function useSession(
         return
       }
 
+      case "form.created": {
+        const form = toFormRequest(data.form)
+        if (!form || forms.value.some((entry) => entry.id === form.id)) return
+        forms.value = [...forms.value, form]
+        return
+      }
+
+      case "form.replied":
+      case "form.cancelled": {
+        // Answered here, from the desktop, or cancelled by the agent itself.
+        const formID = str(data.id)
+        forms.value = forms.value.filter((entry) => entry.id !== formID)
+        return
+      }
+
       case "session.inbox.enqueued": {
         const inboxID = str(data.inboxID)
         const item = record(data.item)
@@ -798,18 +808,20 @@ export function useSession(
     error.value = null
     try {
       const client = requireClient()
-      const [history, detail, statuses, pending, inbox, asked] = await Promise.all([
+      const [history, detail, statuses, pending, inbox, asked, opened] = await Promise.all([
         client.listMessages(sid, dir, requestController.signal),
         client.getSession(sid, dir, requestController.signal).catch(() => null),
         client.getSessionStatuses(dir, requestController.signal).catch(() => null),
         client.listPermissions(sid, requestController.signal).catch(() => []),
         client.listInbox(sid, requestController.signal).catch(() => []),
         client.listQuestions(sid, dir, requestController.signal).catch(() => []),
+        client.listForms(sid, requestController.signal).catch(() => []),
       ])
       if (token !== loadToken || requestController.signal.aborted) return
       mergeHistory(history)
       permissions.value = pending
       questions.value = asked.filter((request) => request.sessionID === sid)
+      forms.value = opened.filter((request) => request.sessionID === sid)
       queued.value = inbox
       title.value = detail?.title?.trim() || null
 
@@ -981,22 +993,16 @@ export function useSession(
   }
 
   /**
-   * Answer the request the agent is blocked on. The row goes away immediately —
-   * `permission.replied` confirms it, but the agent resumes either way and the
-   * card must not sit there looking unanswered.
+   * Answer the request the agent is blocked on. Keep it mounted until the
+   * request succeeds so a failed reply can be retried without losing state.
    */
   async function respondPermission(requestId: string, reply: PermissionReply): Promise<void> {
     const request = permissions.value.find((candidate) => candidate.id === requestId)
     if (!request) return
-    permissions.value = permissions.value.filter((candidate) => candidate.id !== requestId)
     try {
       await requireClient().replyPermission(toValue(sessionId), requestId, reply)
+      permissions.value = permissions.value.filter((candidate) => candidate.id !== requestId)
     } catch (cause) {
-      // Put it back: an unanswered request is the whole reason this screen
-      // exists, so failing quietly would be the worst outcome.
-      permissions.value = [...permissions.value, request].sort((left, right) =>
-        left.id.localeCompare(right.id),
-      )
       throw cause
     }
   }
@@ -1004,13 +1010,15 @@ export function useSession(
   async function respondQuestion(requestId: string, answers: string[][]): Promise<void> {
     const request = questions.value.find((candidate) => candidate.id === requestId)
     if (!request) return
-    questions.value = questions.value.filter((candidate) => candidate.id !== requestId)
     try {
-      await requireClient().replyQuestion(toValue(sessionId), requestId, answers, toValue(directory))
-    } catch (cause) {
-      questions.value = [...questions.value, request].sort((left, right) =>
-        left.id.localeCompare(right.id),
+      await requireClient().replyQuestion(
+        toValue(sessionId),
+        requestId,
+        answers,
+        toValue(directory),
       )
+      questions.value = questions.value.filter((candidate) => candidate.id !== requestId)
+    } catch (cause) {
       throw cause
     }
   }
@@ -1018,13 +1026,32 @@ export function useSession(
   async function rejectQuestion(requestId: string): Promise<void> {
     const request = questions.value.find((candidate) => candidate.id === requestId)
     if (!request) return
-    questions.value = questions.value.filter((candidate) => candidate.id !== requestId)
     try {
       await requireClient().rejectQuestion(toValue(sessionId), requestId, toValue(directory))
+      questions.value = questions.value.filter((candidate) => candidate.id !== requestId)
     } catch (cause) {
-      questions.value = [...questions.value, request].sort((left, right) =>
-        left.id.localeCompare(right.id),
-      )
+      throw cause
+    }
+  }
+
+  async function respondForm(formId: string, answer: FormAnswer): Promise<void> {
+    const form = forms.value.find((candidate) => candidate.id === formId)
+    if (!form) return
+    try {
+      await requireClient().replyForm(toValue(sessionId), formId, answer)
+      forms.value = forms.value.filter((candidate) => candidate.id !== formId)
+    } catch (cause) {
+      throw cause
+    }
+  }
+
+  async function cancelForm(formId: string): Promise<void> {
+    const form = forms.value.find((candidate) => candidate.id === formId)
+    if (!form) return
+    try {
+      await requireClient().cancelForm(toValue(sessionId), formId)
+      forms.value = forms.value.filter((candidate) => candidate.id !== formId)
+    } catch (cause) {
       throw cause
     }
   }
@@ -1126,6 +1153,7 @@ export function useSession(
       model.value = null
       permissions.value = []
       questions.value = []
+      forms.value = []
       queued.value = []
       sending.value = false
       busy.value = false
@@ -1152,6 +1180,7 @@ export function useSession(
     statusNote,
     permissions,
     questions,
+    forms,
     queued,
     deliveryMode,
     title,
@@ -1164,6 +1193,8 @@ export function useSession(
     respondPermission,
     respondQuestion,
     rejectQuestion,
+    respondForm,
+    cancelForm,
     runCommand,
     cancelQueued,
     setQueuedDelivery,
@@ -1179,31 +1210,27 @@ function toQuestionRequest(data: Record<string, unknown>): QuestionRequest | nul
   const sessionID = str(data.sessionID)
   if (!id || !sessionID || !Array.isArray(data.questions)) return null
 
-  const questions = data.questions
-    .flatMap((entry): QuestionInfo[] => {
-      const info = record(entry)
-      const question = str(info?.question)
-      if (!question) return []
-      const options = Array.isArray(info?.options)
-        ? info.options
-            .flatMap((option): QuestionOption[] => {
-              const parsed = record(option)
-              const label = str(parsed?.label)
-              return label
-                ? [{ label, description: str(parsed?.description) ?? undefined }]
-                : []
-            })
-        : []
-      return [
-        {
-          question,
-          header: str(info?.header) ?? undefined,
-          options,
-          multiple: info?.multiple === true,
-          custom: info?.custom !== false,
-        },
-      ]
-    })
+  const questions = data.questions.flatMap((entry): QuestionInfo[] => {
+    const info = record(entry)
+    const question = str(info?.question)
+    if (!question) return []
+    const options = Array.isArray(info?.options)
+      ? info.options.flatMap((option): QuestionOption[] => {
+          const parsed = record(option)
+          const label = str(parsed?.label)
+          return label ? [{ label, description: str(parsed?.description) ?? undefined }] : []
+        })
+      : []
+    return [
+      {
+        question,
+        header: str(info?.header) ?? undefined,
+        options,
+        multiple: info?.multiple === true,
+        custom: info?.custom !== false,
+      },
+    ]
+  })
 
   if (questions.length === 0) return null
   return { id, sessionID, questions }

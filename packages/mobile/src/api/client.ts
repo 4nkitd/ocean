@@ -7,6 +7,11 @@ import type {
   FileNode,
   FileChangeStatus,
   FileStatus,
+  FormAnswer,
+  FormCondition,
+  FormField,
+  FormOption,
+  FormRequest,
   GitCommit,
   GitCommitDetail,
   GitCommitFile,
@@ -178,7 +183,12 @@ export class OpenCodeClient {
     const contentType = response.headers.get("content-type") ?? ""
     if (contentType.includes("text/html")) {
       if (optional) return null as T
-      throw new ApiError("notfound", `No v2 API at ${path} — the server answered with a web UI`, 404, url)
+      throw new ApiError(
+        "notfound",
+        `No v2 API at ${path} — the server answered with a web UI`,
+        404,
+        url,
+      )
     }
 
     const text = await response.text()
@@ -240,8 +250,7 @@ export class OpenCodeClient {
     // `/api/project/current` does not report `vcs`; the project list does, so
     // the entry that owns this directory is the authoritative "is a repo".
     const owning = (projects ?? []).find(
-      (project) =>
-        project.canonical === cwd || (project.sandboxes ?? []).includes(cwd ?? ""),
+      (project) => project.canonical === cwd || (project.sandboxes ?? []).includes(cwd ?? ""),
     )
     return {
       git: owning?.vcs === "git",
@@ -546,12 +555,14 @@ export class OpenCodeClient {
 
   async listProjects(signal?: AbortSignal): Promise<Project[]> {
     const result = await this.request<RawProject[]>("/project", { signal, optional: true })
-    return (result ?? [])
-      .map(toProject)
-      // v2 keeps a `global` project for anything outside a known root. It is
-      // only noise when it has no real directory behind it — when it does, it
-      // is the directory the server was started in and belongs on the screen.
-      .filter((project) => project.worktree && project.worktree !== "/")
+    return (
+      (result ?? [])
+        .map(toProject)
+        // v2 keeps a `global` project for anything outside a known root. It is
+        // only noise when it has no real directory behind it — when it does, it
+        // is the directory the server was started in and belongs on the screen.
+        .filter((project) => project.worktree && project.worktree !== "/")
+    )
   }
 
   async getCurrentProject(directory?: string, signal?: AbortSignal): Promise<Project | null> {
@@ -1024,6 +1035,40 @@ export class OpenCodeClient {
     )
   }
 
+  // ── forms ───────────────────────────────────────────────────────────────
+
+  /**
+   * The forms this session is waiting on. Like permissions, these have to be
+   * fetched on load and not only watched: a form raised before the screen
+   * opened is exactly the case that leaves an agent stuck forever.
+   */
+  async listForms(sessionId: string, signal?: AbortSignal): Promise<FormRequest[]> {
+    const result = await this.data<unknown[]>(`/session/${encodeURIComponent(sessionId)}/form`, {
+      signal,
+      optional: true,
+    })
+    if (!Array.isArray(result)) return []
+    return result.flatMap((entry) => {
+      const form = toFormRequest(entry)
+      return form ? [form] : []
+    })
+  }
+
+  /** Submit a form. The answer may only carry keys the server considers active. */
+  async replyForm(sessionId: string, formId: string, answer: FormAnswer): Promise<void> {
+    await this.request(
+      `/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}/reply`,
+      { method: "POST", body: { answer } },
+    )
+  }
+
+  async cancelForm(sessionId: string, formId: string): Promise<void> {
+    await this.request(
+      `/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(formId)}/cancel`,
+      { method: "POST" },
+    )
+  }
+
   // ── mcp ─────────────────────────────────────────────────────────────────
 
   /**
@@ -1253,8 +1298,7 @@ type RawToolState =
     }
 
 type RawToolContent =
-  | { type: "text"; text?: string }
-  | { type: "file"; uri?: string; mime?: string; name?: string }
+  { type: "text"; text?: string } | { type: "file"; uri?: string; mime?: string; name?: string }
 
 interface RawContentPart {
   type: string
@@ -1273,7 +1317,12 @@ interface RawMessage {
   agent?: string
   model?: { id?: string; providerID?: string; variant?: string }
   content?: RawContentPart[]
-  files?: { data?: string; mime?: string; name?: string; source?: { type?: string; uri?: string } }[]
+  files?: {
+    data?: string
+    mime?: string
+    name?: string
+    source?: { type?: string; uri?: string }
+  }[]
   cost?: number
   tokens?: { input?: number; output?: number; reasoning?: number; cache?: Record<string, number> }
   error?: { type?: string; message?: string }
@@ -1421,9 +1470,150 @@ function normaliseServerEvent(value: unknown): ServerEvent | null {
     type,
     id: stringValue(root.id) ?? undefined,
     directory: stringValue(location?.directory) ?? undefined,
-    sessionID: stringValue(data.sessionID) ?? undefined,
+    // `form.created` is the one event that carries the session inside its
+    // payload object rather than beside it; without this it looks sessionless
+    // and every screen drops it.
+    sessionID:
+      stringValue(data.sessionID) ?? stringValue(record(data.form)?.sessionID) ?? undefined,
     data,
   }
+}
+
+/**
+ * Read a `Form.Info` — from the REST list or off the stream — into something
+ * the UI can render without trusting the server's build.
+ *
+ * A field whose `type` this build has never heard of becomes a text field
+ * rather than a hole in the form: the user can still answer it, and a form that
+ * cannot be answered is a session that never continues.
+ */
+export function toFormRequest(value: unknown): FormRequest | null {
+  const root = record(value)
+  if (!root) return null
+  const id = stringValue(root.id)
+  const sessionID = stringValue(root.sessionID)
+  if (!id || !sessionID || !Array.isArray(root.fields)) return null
+
+  const fields = root.fields.flatMap((entry): FormField[] => {
+    const raw = record(entry)
+    const key = stringValue(raw?.key)
+    return raw && key ? [toFormField(raw, key)] : []
+  })
+  if (fields.length === 0) return null
+
+  return {
+    id,
+    sessionID,
+    title: stringValue(root.title) ?? "The agent needs some details",
+    fields,
+    metadata: record(root.metadata) ?? undefined,
+  }
+}
+
+function toFormField(raw: Record<string, unknown>, key: string): FormField {
+  const base = {
+    key,
+    title: stringValue(raw.title) ?? undefined,
+    description: stringValue(raw.description) ?? undefined,
+    required: raw.required === true,
+    when: toFormConditions(raw.when),
+  }
+  const type = stringValue(raw.type)
+
+  switch (type) {
+    case "number":
+    case "integer":
+      return {
+        ...base,
+        type,
+        minimum: numberValue(raw.minimum) ?? undefined,
+        maximum: numberValue(raw.maximum) ?? undefined,
+        default: numberValue(raw.default) ?? undefined,
+      }
+
+    case "boolean":
+      return {
+        ...base,
+        type,
+        default: typeof raw.default === "boolean" ? raw.default : undefined,
+      }
+
+    case "multiselect": {
+      // A list with nothing to pick could never be answered; let it be typed.
+      const choices = toFormOptions(raw.options)
+      if (choices.length === 0) break
+      return {
+        ...base,
+        type,
+        options: choices,
+        minItems: numberValue(raw.minItems) ?? undefined,
+        maxItems: numberValue(raw.maxItems) ?? undefined,
+        custom: raw.custom === true,
+        default: Array.isArray(raw.default)
+          ? raw.default.filter((entry): entry is string => typeof entry === "string")
+          : undefined,
+      }
+    }
+
+    case "external": {
+      const url = stringValue(raw.url)
+      if (url) return { ...base, type, url }
+      break
+    }
+  }
+
+  const options = toFormOptions(raw.options)
+  const format = stringValue(raw.format)
+  return {
+    ...base,
+    type: "string",
+    format:
+      format === "email" || format === "uri" || format === "date" || format === "date-time"
+        ? format
+        : undefined,
+    minLength: numberValue(raw.minLength) ?? undefined,
+    maxLength: numberValue(raw.maxLength) ?? undefined,
+    pattern: stringValue(raw.pattern) ?? undefined,
+    placeholder: stringValue(raw.placeholder) ?? undefined,
+    default: stringValue(raw.default) ?? undefined,
+    options: options.length ? options : undefined,
+    custom: raw.custom === true,
+  }
+}
+
+function toFormOptions(value: unknown): FormOption[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry): FormOption[] => {
+    const option = record(entry)
+    const optionValue = stringValue(option?.value)
+    if (!option || !optionValue) return []
+    return [
+      {
+        value: optionValue,
+        label: stringValue(option.label) ?? optionValue,
+        description: stringValue(option.description) ?? undefined,
+      },
+    ]
+  })
+}
+
+function toFormConditions(value: unknown): FormCondition[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const conditions = value.flatMap((entry): FormCondition[] => {
+    const raw = record(entry)
+    const key = stringValue(raw?.key)
+    const op = stringValue(raw?.op)
+    const compared = raw?.value
+    if (!key || (op !== "eq" && op !== "neq")) return []
+    if (
+      typeof compared !== "string" &&
+      typeof compared !== "number" &&
+      typeof compared !== "boolean"
+    )
+      return []
+    return [{ key, op, value: compared }]
+  })
+  return conditions.length ? conditions : undefined
 }
 
 /**
@@ -1449,7 +1639,12 @@ function quoteShellArgument(value: string): string {
 }
 
 function firstLine(value: string): string {
-  return value.split("\n").find((line) => line.trim())?.trim() ?? ""
+  return (
+    value
+      .split("\n")
+      .find((line) => line.trim())
+      ?.trim() ?? ""
+  )
 }
 
 function lastLine(value: string): string {
@@ -1675,7 +1870,7 @@ export function toolOutput(content: unknown): string {
       const entry = record(block) ?? {}
       if (entry.type === "text") return typeof entry.text === "string" ? entry.text : ""
       if (entry.type === "file")
-        return typeof entry.name === "string" ? entry.name : stringValue(entry.uri) ?? ""
+        return typeof entry.name === "string" ? entry.name : (stringValue(entry.uri) ?? "")
       return ""
     })
     .filter(Boolean)
@@ -1752,4 +1947,9 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value ? value : null
+}
+
+/** Finite numbers only — the schema also admits `Infinity`/`NaN` as strings. */
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
 }

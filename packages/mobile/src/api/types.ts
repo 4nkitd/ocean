@@ -397,6 +397,97 @@ export interface QuestionRequest {
   tool?: { messageID: string; callID: string }
 }
 
+/** One answered field. Numbers go out as numbers — the server rejects `"2"`. */
+export type FormValue = string | number | boolean | string[]
+
+/** The whole reply, keyed by field. Only *active* fields may appear. */
+export type FormAnswer = Record<string, FormValue>
+
+export interface FormOption {
+  value: string
+  label: string
+  description?: string
+}
+
+/**
+ * A field is only asked when every one of its conditions holds against the
+ * answers so far. Sending a field whose conditions fail is a 400, so this
+ * decides what is rendered *and* what is submitted.
+ */
+export interface FormCondition {
+  key: string
+  op: "eq" | "neq"
+  value: string | number | boolean
+}
+
+interface FormFieldBase {
+  key: string
+  title?: string
+  description?: string
+  required?: boolean
+  when?: FormCondition[]
+}
+
+/** Free text, or a single-choice list when `options` is present. */
+export interface FormStringField extends FormFieldBase {
+  type: "string"
+  format?: "email" | "uri" | "date" | "date-time"
+  minLength?: number
+  maxLength?: number
+  pattern?: string
+  placeholder?: string
+  default?: string
+  options?: FormOption[]
+  /** With `options`, also accept a value the user types. */
+  custom?: boolean
+}
+
+export interface FormNumberField extends FormFieldBase {
+  type: "number" | "integer"
+  minimum?: number
+  maximum?: number
+  default?: number
+}
+
+export interface FormBooleanField extends FormFieldBase {
+  type: "boolean"
+  default?: boolean
+}
+
+export interface FormMultiselectField extends FormFieldBase {
+  type: "multiselect"
+  options: FormOption[]
+  minItems?: number
+  maxItems?: number
+  custom?: boolean
+  default?: string[]
+}
+
+/**
+ * A link the user has to go and deal with elsewhere. Every one of these must be
+ * acknowledged — answered with `true` — before the form will submit, whether or
+ * not it is marked required.
+ */
+export interface FormExternalField extends FormFieldBase {
+  type: "external"
+  url: string
+}
+
+export type FormField =
+  FormStringField | FormNumberField | FormBooleanField | FormMultiselectField | FormExternalField
+
+/**
+ * `form.created` / `GET /api/session/{id}/form` — a structured request the
+ * agent is blocked on, the same way it blocks on a permission or a question.
+ */
+export interface FormRequest {
+  id: string
+  sessionID: string
+  title: string
+  fields: FormField[]
+  metadata?: Record<string, unknown>
+}
+
 /** `GET /api/agent` — one agent the session can run under. */
 export interface AgentInfo {
   id: string

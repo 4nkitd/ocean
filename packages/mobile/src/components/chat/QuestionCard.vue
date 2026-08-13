@@ -1,15 +1,26 @@
 <script setup lang="ts">
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import type { QuestionRequest } from "@/api/types"
 import AppIcon from "@/components/ui/AppIcon.vue"
 
-const props = defineProps<{ request: QuestionRequest; pending: number }>()
+const props = defineProps<{
+  request: QuestionRequest
+  pending: number
+  error?: string | null
+}>()
 const emit = defineEmits<{
   reply: [id: string, answers: string[][]]
   dismiss: [id: string]
 }>()
 
 const busy = ref(false)
+
+watch(
+  () => [props.request.id, props.error],
+  () => {
+    if (props.error || busy.value) busy.value = false
+  },
+)
 
 const picks = ref<string[][]>(props.request.questions.map(() => []))
 const customs = ref<string[]>(props.request.questions.map(() => ""))
@@ -65,7 +76,12 @@ function dismiss(): void {
 </script>
 
 <template>
-  <section class="ask" role="alertdialog" aria-live="assertive" aria-label="The agent has a question">
+  <section
+    class="ask"
+    role="alertdialog"
+    aria-live="assertive"
+    aria-label="The agent has a question"
+  >
     <header class="ask__head">
       <AppIcon name="spinner" :size="13" class="ask__spin" />
       <span class="ask__kicker">The agent asks</span>
@@ -106,6 +122,8 @@ function dismiss(): void {
         />
       </fieldset>
     </div>
+
+    <p v-if="error" class="ask__error" role="alert">{{ error }} Try again.</p>
 
     <div class="ask__actions">
       <button
@@ -251,6 +269,14 @@ function dismiss(): void {
   margin-top: 11px;
   display: flex;
   gap: 8px;
+}
+
+.ask__error {
+  margin-top: 8px;
+  color: var(--accent-500);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .ask__button {

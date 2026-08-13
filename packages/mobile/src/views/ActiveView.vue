@@ -184,8 +184,9 @@ onUnmounted(() => {
       <div class="head__text">
         <h1 class="head__title">Active</h1>
         <p class="head__sub">
-          {{ connection.serverLabel.value }} ·
-          {{ rows.length }} running<template v-if="blockedCount">
+          {{ connection.serverLabel.value }} · {{ rows.length }} running<template
+            v-if="blockedCount"
+          >
             · {{ blockedCount }} waiting on you</template
           >
         </p>
@@ -227,9 +228,7 @@ onUnmounted(() => {
                 <span v-if="row.request" class="row__ask">
                   needs you · {{ row.request.action }}
                 </span>
-                <span v-else-if="row.started" class="row__time">
-                  working {{ elapsed(row) }}
-                </span>
+                <span v-else-if="row.started" class="row__time"> working {{ elapsed(row) }} </span>
                 <span v-else class="row__time">{{ relativeTime(row.session.time.updated) }}</span>
               </span>
             </span>
@@ -257,7 +256,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 18px var(--space-5) 14px;
+  padding: calc(var(--safe-top) + 18px) var(--space-5) 14px;
   border-bottom: 1px solid var(--rule);
 }
 

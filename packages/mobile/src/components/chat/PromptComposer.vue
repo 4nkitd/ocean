@@ -10,9 +10,11 @@
  * mid-session.
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from "vue"
+import { useRoute } from "vue-router"
 import type { CommandInfo, InboxDelivery, PromptAttachment } from "@/api/types"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import ImageLightbox from "@/components/ui/ImageLightbox.vue"
+import TypeBadge from "@/components/ui/TypeBadge.vue"
 
 const props = withDefaults(
   defineProps<{
@@ -52,6 +54,7 @@ const emit = defineEmits<{
 const id = useId()
 const text = ref("")
 const field = ref<HTMLTextAreaElement | null>(null)
+const route = useRoute()
 
 /** Roughly five lines; past that the field scrolls rather than eating the screen. */
 const MAX_HEIGHT = 132
@@ -87,13 +90,91 @@ onUnmounted(() => pointerQuery?.removeEventListener("change", onPointerChange))
 // ── attachments ────────────────────────────────────────────────────────────
 
 /**
- * Images ride along on the prompt body as data URLs, so the only cost of a
+ * Attachments ride along on the prompt body as data URLs, so the only cost of a
  * generous limit is request size. Four is what fits the thumbnail strip without
  * it scrolling, and 8MB is comfortably above a phone screenshot while staying
  * under what a provider will refuse.
  */
 const MAX_ATTACHMENTS = 4
 const MAX_BYTES = 8 * 1024 * 1024
+
+/**
+ * A browser reports no mime for most source files, so the extension is the only
+ * thing left to go on. Anything here is sent as text the model can read.
+ */
+const TEXT_EXTENSIONS = new Set([
+  "astro",
+  "c",
+  "cc",
+  "cfg",
+  "conf",
+  "cpp",
+  "cs",
+  "css",
+  "csv",
+  "dart",
+  "diff",
+  "env",
+  "go",
+  "gradle",
+  "graphql",
+  "h",
+  "hpp",
+  "html",
+  "ini",
+  "java",
+  "js",
+  "json",
+  "jsonc",
+  "jsx",
+  "kt",
+  "log",
+  "lua",
+  "md",
+  "mdx",
+  "mjs",
+  "patch",
+  "php",
+  "pl",
+  "prisma",
+  "py",
+  "r",
+  "rb",
+  "rs",
+  "scss",
+  "sh",
+  "sql",
+  "svelte",
+  "swift",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "vue",
+  "xml",
+  "yaml",
+  "yml",
+  "zig",
+  "zsh",
+])
+
+const TEXT_MIMES = /^(text\/|application\/(json|xml|x-yaml|yaml|javascript|typescript))/
+
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf(".")
+  return dot === -1 ? "" : name.slice(dot + 1).toLowerCase()
+}
+
+function isImage(attachment: Pick<PromptAttachment, "mime">): boolean {
+  return attachment.mime.startsWith("image/")
+}
+
+function isAttachable(file: File): boolean {
+  if (file.type.startsWith("image/")) return true
+  if (TEXT_MIMES.test(file.type)) return true
+  // No mime at all is the normal case for source files.
+  return file.type === "" && TEXT_EXTENSIONS.has(extensionOf(file.name))
+}
 
 const attachments = ref<PromptAttachment[]>([])
 const picker = ref<HTMLInputElement | null>(null)
@@ -113,16 +194,17 @@ function readAsDataUrl(file: File): Promise<string> {
 
 async function accept(files: File[]): Promise<void> {
   attachError.value = null
-  const images = files.filter((file) => file.type.startsWith("image/"))
-  if (images.length < files.length) attachError.value = "Only images can be attached."
+  const usable = files.filter(isAttachable)
+  if (usable.length < files.length)
+    attachError.value = "Only images and text files can be attached."
 
-  for (const file of images) {
+  for (const file of usable) {
     if (attachments.value.length >= MAX_ATTACHMENTS) {
-      attachError.value = `Up to ${MAX_ATTACHMENTS} images per message.`
+      attachError.value = `Up to ${MAX_ATTACHMENTS} attachments per message.`
       break
     }
     if (file.size > MAX_BYTES) {
-      attachError.value = `${file.name || "That image"} is over 8MB.`
+      attachError.value = `${file.name || "That file"} is over 8MB.`
       continue
     }
     try {
@@ -134,7 +216,7 @@ async function accept(files: File[]): Promise<void> {
         url: await readAsDataUrl(file),
       })
     } catch {
-      attachError.value = "That image could not be read."
+      attachError.value = `${file.name || "That file"} could not be read.`
     }
   }
 }
@@ -159,6 +241,187 @@ function remove(id: string): void {
   if (preview.value?.id === id) preview.value = null
   attachError.value = null
 }
+
+// ── draft and history ──────────────────────────────────────────────────────
+
+/**
+ * A phone takes the app away mid-sentence — a call, a notification, the browser
+ * evicting a background tab — and a lost prompt is the most expensive thing to
+ * retype on a touch keyboard. The draft is keyed by route, so it belongs to the
+ * session it was typed in and comes back when you return to it.
+ */
+const HISTORY_KEY = "opencode.prompt-history"
+const MAX_HISTORY = 30
+
+const draftKey = computed(() => `opencode.draft:${route.path}`)
+const history = ref<string[]>(readHistory())
+/** Where ↑ has walked to; -1 is the line being typed. */
+const recall = ref(-1)
+
+function readHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === "string") : []
+  } catch {
+    return []
+  }
+}
+
+function rememberPrompt(value: string): void {
+  history.value = [value, ...history.value.filter((entry) => entry !== value)].slice(0, MAX_HISTORY)
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
+  } catch {
+    return
+  }
+}
+
+function saveDraft(value: string): void {
+  try {
+    if (value) localStorage.setItem(draftKey.value, value)
+    else localStorage.removeItem(draftKey.value)
+  } catch {
+    return
+  }
+}
+
+watch(text, (value) => saveDraft(value))
+
+onMounted(() => {
+  try {
+    const draft = localStorage.getItem(draftKey.value)
+    if (draft) {
+      text.value = draft
+      void nextTick(resize)
+    }
+  } catch {
+    return
+  }
+})
+
+/** ↑ and ↓ walk previous prompts, but only from an empty box so editing wins. */
+function onHistoryKey(event: KeyboardEvent): boolean {
+  if (menuOpen.value || !history.value.length) return false
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return false
+  if (recall.value === -1 && (event.key === "ArrowDown" || text.value !== "")) return false
+
+  const step = event.key === "ArrowUp" ? 1 : -1
+  const next = Math.min(history.value.length - 1, Math.max(-1, recall.value + step))
+  if (next === recall.value) return true
+
+  event.preventDefault()
+  recall.value = next
+  text.value = next === -1 ? "" : (history.value[next] ?? "")
+  void nextTick(resize)
+  return true
+}
+
+// ── dictation ──────────────────────────────────────────────────────────────
+
+/**
+ * Speaking a paragraph beats typing it on a phone. The API is prefixed on every
+ * browser that has it and missing entirely on the rest, so the button only
+ * appears where it will actually work.
+ */
+interface SpeechResultLike {
+  isFinal: boolean
+  0: { transcript: string }
+}
+
+interface SpeechEventLike {
+  resultIndex: number
+  results: { length: number; [index: number]: SpeechResultLike }
+}
+
+interface SpeechRecognitionLike {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  start(): void
+  stop(): void
+  onresult: ((event: SpeechEventLike) => void) | null
+  onerror: ((event: { error?: string }) => void) | null
+  onend: (() => void) | null
+}
+
+type SpeechCtor = new () => SpeechRecognitionLike
+
+const speechCtor =
+  typeof window === "undefined"
+    ? undefined
+    : ((
+        window as unknown as {
+          SpeechRecognition?: SpeechCtor
+          webkitSpeechRecognition?: SpeechCtor
+        }
+      ).SpeechRecognition ??
+      (window as unknown as { webkitSpeechRecognition?: SpeechCtor }).webkitSpeechRecognition)
+
+const voiceSupported = !!speechCtor
+const listening = ref(false)
+const voiceError = ref<string | null>(null)
+let recogniser: SpeechRecognitionLike | null = null
+
+/** One line for both, so the box never grows two error rows. */
+const notice = computed(() => attachError.value ?? voiceError.value)
+
+function appendSpoken(transcript: string): void {
+  const spoken = transcript.trim()
+  if (!spoken) return
+  const current = text.value
+  text.value = current && !current.endsWith(" ") ? `${current} ${spoken}` : `${current}${spoken}`
+  void nextTick(resize)
+}
+
+function stopDictation(): void {
+  recogniser?.stop()
+  listening.value = false
+}
+
+function startDictation(): void {
+  if (!speechCtor) return
+  voiceError.value = null
+  const instance = new speechCtor()
+  instance.lang = navigator.language || "en-US"
+  instance.continuous = false
+  instance.interimResults = false
+
+  instance.onresult = (event) => {
+    for (let index = event.resultIndex; index < event.results.length; index++) {
+      const result = event.results[index]
+      if (result?.isFinal) appendSpoken(result[0].transcript)
+    }
+  }
+  instance.onerror = (event) => {
+    voiceError.value =
+      event.error === "not-allowed"
+        ? "Microphone access was refused."
+        : "Dictation stopped unexpectedly."
+    listening.value = false
+  }
+  instance.onend = () => {
+    listening.value = false
+  }
+
+  recogniser = instance
+  try {
+    instance.start()
+    listening.value = true
+  } catch {
+    voiceError.value = "Dictation could not start."
+    listening.value = false
+  }
+}
+
+function toggleDictation(): void {
+  if (listening.value) stopDictation()
+  else startDictation()
+}
+
+onUnmounted(() => {
+  if (listening.value) stopDictation()
+})
 
 // ── sending ────────────────────────────────────────────────────────────────
 
@@ -266,16 +529,22 @@ function onMenuKey(event: KeyboardEvent): boolean {
 
 function submit(): void {
   if (!canSend.value) return
-  emit("send", text.value, attachments.value)
+  const body = text.value
+  emit("send", body, attachments.value)
+  if (body.trim()) rememberPrompt(body.trim())
+  recall.value = -1
   text.value = ""
   attachments.value = []
   attachError.value = null
+  voiceError.value = null
+  if (listening.value) stopDictation()
   void nextTick(resize)
 }
 
 function onKeydown(event: KeyboardEvent): void {
   // Arrow keys, Tab, Enter and Escape belong to the command menu while it is up.
   if (onMenuKey(event)) return
+  if (onHistoryKey(event)) return
   if (event.key !== "Enter") return
   // Shift+Enter, an IME candidate window, and every touch keyboard: newline.
   if (event.shiftKey || event.isComposing || coarsePointer.value) return
@@ -290,10 +559,16 @@ function onKeydown(event: KeyboardEvent): void {
       <!-- Inside the box and above the text, so an attached image reads as
            part of the message being written rather than as a separate strip. -->
       <ul v-if="attachments.length" class="box__thumbs">
-        <li v-for="attachment in attachments" :key="attachment.id" class="box__thumb">
+        <li
+          v-for="attachment in attachments"
+          :key="attachment.id"
+          class="box__thumb"
+          :class="{ 'box__thumb--file': !isImage(attachment) }"
+        >
           <!-- The thumbnail is a button: 52px is enough to know an image is
                attached, not enough to know which one, so it opens full size. -->
           <button
+            v-if="isImage(attachment)"
             type="button"
             class="box__zoom"
             :aria-label="`Preview ${attachment.filename}`"
@@ -301,6 +576,10 @@ function onKeydown(event: KeyboardEvent): void {
           >
             <img :src="attachment.url" :alt="attachment.filename" />
           </button>
+          <span v-else class="box__file">
+            <TypeBadge :filename="attachment.filename" :size="18" />
+            <span class="box__name mono">{{ attachment.filename }}</span>
+          </span>
           <button
             type="button"
             class="box__drop"
@@ -312,7 +591,7 @@ function onKeydown(event: KeyboardEvent): void {
         </li>
       </ul>
 
-      <p v-if="attachError" class="box__error" role="status">{{ attachError }}</p>
+      <p v-if="notice" class="box__error" role="status">{{ notice }}</p>
 
       <ul v-if="menuOpen" class="menu" role="listbox" aria-label="Commands">
         <li v-for="(command, index) in suggestions" :key="command.name">
@@ -355,7 +634,7 @@ function onKeydown(event: KeyboardEvent): void {
           ref="picker"
           type="file"
           class="sr-only"
-          accept="image/*"
+          accept="image/*,text/*,.md,.mdx,.json,.yml,.yaml,.toml,.ts,.tsx,.js,.jsx,.vue,.svelte,.py,.go,.rs,.rb,.php,.java,.kt,.swift,.c,.h,.cpp,.cs,.sh,.sql,.css,.scss,.html,.xml,.csv,.log,.env,.diff,.patch"
           multiple
           tabindex="-1"
           aria-hidden="true"
@@ -364,12 +643,26 @@ function onKeydown(event: KeyboardEvent): void {
         <button
           type="button"
           class="bar__icon"
-          aria-label="Attach an image"
-          title="Attach an image"
+          aria-label="Attach an image or text file"
+          title="Attach a file"
           :disabled="disabled || attachments.length >= 4"
           @click="picker?.click()"
         >
           <AppIcon name="plus" :size="16" />
+        </button>
+
+        <button
+          v-if="voiceSupported"
+          type="button"
+          class="bar__icon"
+          :class="{ 'bar__icon--on': listening }"
+          :aria-label="listening ? 'Stop dictation' : 'Dictate the prompt'"
+          :aria-pressed="listening"
+          :title="listening ? 'Stop dictation' : 'Dictate'"
+          :disabled="disabled"
+          @click="toggleDictation"
+        >
+          <AppIcon name="mic" :size="16" />
         </button>
 
         <button
@@ -494,6 +787,30 @@ function onKeydown(event: KeyboardEvent): void {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/* A text file has nothing to show, so the chip names it instead. */
+.box__thumb--file {
+  width: auto;
+  max-width: 170px;
+  padding-right: 20px;
+}
+
+.box__file {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  min-width: 0;
+}
+
+.box__name {
+  font-size: 10px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .box__zoom {
@@ -632,6 +949,17 @@ function onKeydown(event: KeyboardEvent): void {
 
 .bar__icon:disabled {
   opacity: 0.4;
+}
+
+.bar__icon--on {
+  color: var(--accent);
+  animation: listening 1.4s ease-in-out infinite;
+}
+
+@keyframes listening {
+  50% {
+    opacity: 0.45;
+  }
 }
 
 .bar__pick {

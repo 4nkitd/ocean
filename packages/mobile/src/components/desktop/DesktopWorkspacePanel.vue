@@ -4,7 +4,9 @@ import type { FileStatus, GitCommit } from "@/api/types"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import GitCommitRow from "@/components/git/GitCommitRow.vue"
 import McpList from "@/components/mcp/McpList.vue"
+import TodoDock from "@/components/chat/TodoDock.vue"
 import TypeBadge from "@/components/ui/TypeBadge.vue"
+import type { TodoItem } from "@/stores/todos"
 import { basename, relativeTo } from "@/lib/format"
 import { formatChangeCounts } from "@/lib/diff"
 import { useFileTree } from "@/stores/files"
@@ -13,10 +15,15 @@ import { useActiveSessions } from "@/stores/active"
 import { encodePathParam } from "@/router"
 import { useRouter } from "vue-router"
 
-const props = defineProps<{
-  directory: string
-  isRepo: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    directory: string
+    isRepo: boolean
+    /** The agent's current plan, derived from the transcript by the session view. */
+    todos?: TodoItem[]
+  }>(),
+  { todos: () => [] },
+)
 
 const emit = defineEmits<{
   openFile: [string]
@@ -24,7 +31,7 @@ const emit = defineEmits<{
   openCommit: [GitCommit]
 }>()
 
-const activePanel = ref<"files" | "git" | "mcp" | "active">("git")
+const activePanel = ref<"files" | "git" | "todos" | "mcp" | "active">("git")
 const router = useRouter()
 /**
  * Every agent running on this server, not just this project's — the desktop
@@ -138,6 +145,19 @@ onMounted(() => {
         <button
           type="button"
           class="workspace__tab"
+          :class="{ 'workspace__tab--active': activePanel === 'todos' }"
+          :aria-selected="activePanel === 'todos'"
+          role="tab"
+          title="Plan"
+          aria-label="Plan"
+          @click="activePanel = 'todos'"
+        >
+          <AppIcon name="list" :size="15" />
+          <span v-if="todos.length" class="workspace__badge">{{ todos.length }}</span>
+        </button>
+        <button
+          type="button"
+          class="workspace__tab"
           :class="{ 'workspace__tab--active': activePanel === 'mcp' }"
           :aria-selected="activePanel === 'mcp'"
           role="tab"
@@ -157,7 +177,7 @@ onMounted(() => {
           aria-label="Active sessions"
           @click="activePanel = 'active'"
         >
-          <AppIcon name="spinner" :size="15" :class="{ 'workspace__spin': activeRows.length > 0 }" />
+          <AppIcon name="spinner" :size="15" :class="{ workspace__spin: activeRows.length > 0 }" />
           <span v-if="activeRows.length" class="workspace__badge">{{ activeRows.length }}</span>
         </button>
       </div>
@@ -204,6 +224,15 @@ onMounted(() => {
           <span class="file-row__name">{{ row.name }}</span>
           <span v-if="row.changed" class="file-row__count">{{ row.changed }}</span>
         </button>
+      </div>
+    </template>
+
+    <template v-else-if="activePanel === 'todos'">
+      <div v-if="todos.length === 0" class="workspace__state">
+        No plan yet — the agent writes one when a task needs steps.
+      </div>
+      <div v-else class="scroll-y workspace__body">
+        <TodoDock :todos="todos" variant="panel" />
       </div>
     </template>
 
@@ -315,38 +344,33 @@ onMounted(() => {
       <div class="scroll-y workspace__body">
         <p v-if="activeRows.length === 0" class="active__empty">Nothing is running right now.</p>
         <button
-        v-for="row in activeRows"
-        :key="row.session.id"
-        type="button"
-        class="active__row"
-        :class="{ 'active__row--blocked': !!row.request }"
-        @click="openActive(row.directory, row.session.id)"
-      >
-        <AppIcon
-          :name="row.request ? 'alert' : 'spinner'"
-          :size="13"
-          class="active__mark"
-          :class="{ 'workspace__spin': !row.request }"
-        />
-        <span class="active__body">
-          <span class="active__title">{{ row.session.title || "Untitled session" }}</span>
-          <span class="active__meta">
-            <span class="active__project">{{ row.project }}</span>
-            <span v-if="row.request" class="active__ask">needs you</span>
-            <span v-else class="active__time">{{ activeElapsed(row) }}</span>
+          v-for="row in activeRows"
+          :key="row.session.id"
+          type="button"
+          class="active__row"
+          :class="{ 'active__row--blocked': !!row.request }"
+          @click="openActive(row.directory, row.session.id)"
+        >
+          <AppIcon
+            :name="row.request ? 'alert' : 'spinner'"
+            :size="13"
+            class="active__mark"
+            :class="{ workspace__spin: !row.request }"
+          />
+          <span class="active__body">
+            <span class="active__title">{{ row.session.title || "Untitled session" }}</span>
+            <span class="active__meta">
+              <span class="active__project">{{ row.project }}</span>
+              <span v-if="row.request" class="active__ask">needs you</span>
+              <span v-else class="active__time">{{ activeElapsed(row) }}</span>
+            </span>
           </span>
-        </span>
         </button>
       </div>
 
       <!-- Pinned rather than in the header: it belongs to this list, and at the
            bottom it is under the thumb instead of across the panel. -->
-      <button
-        type="button"
-        class="active__refresh"
-        :disabled="activeLoading"
-        @click="reloadActive"
-      >
+      <button type="button" class="active__refresh" :disabled="activeLoading" @click="reloadActive">
         <AppIcon
           :name="activeLoading ? 'spinner' : 'refresh'"
           :size="13"

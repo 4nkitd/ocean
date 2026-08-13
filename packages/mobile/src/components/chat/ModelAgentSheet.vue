@@ -20,6 +20,8 @@ const props = defineProps<{
   model: ModelRef | null
   /** Which picker this sheet is: the agent list or the model list. */
   section: "model" | "agent"
+  saving: boolean
+  selectionError: string | null
 }>()
 
 const emit = defineEmits<{
@@ -30,9 +32,9 @@ const emit = defineEmits<{
 
 const agents = ref<AgentInfo[]>([])
 const models = ref<ModelInfo[]>([])
+const modelQuery = ref("")
 const loading = ref(true)
 const error = ref<string | null>(null)
-const busy = ref(false)
 
 const sheet = ref<HTMLElement | null>(null)
 
@@ -45,6 +47,16 @@ function displayModel(model: ModelInfo): string {
   return model.name ?? model.id
 }
 
+const filteredModels = computed(() => {
+  const query = modelQuery.value.trim().toLowerCase()
+  if (!query) return models.value
+  return models.value.filter((model) =>
+    [displayModel(model), model.id, model.providerID, model.family ?? ""].some((value) =>
+      value.toLowerCase().includes(query),
+    ),
+  )
+})
+
 /**
  * Models grouped under the provider serving them.
  *
@@ -54,7 +66,7 @@ function displayModel(model: ModelInfo): string {
  */
 const modelsByProvider = computed(() => {
   const groups = new Map<string, ModelInfo[]>()
-  for (const model of models.value) {
+  for (const model of filteredModels.value) {
     const list = groups.get(model.providerID)
     if (list) list.push(model)
     else groups.set(model.providerID, [model])
@@ -101,28 +113,16 @@ async function load() {
   }
 }
 
-async function selectAgent(agent: string) {
-  if (busy.value || agent === props.agent) return
-  busy.value = true
-  try {
-    await requireClient().switchAgent(props.sessionId, agent, props.directory)
-    emit("agentChange", agent)
-  } finally {
-    busy.value = false
-  }
+function selectAgent(agent: string): void {
+  if (props.saving || agent === props.agent) return
+  emit("agentChange", agent)
 }
 
-async function selectModel(model: ModelInfo, variant?: string) {
-  if (busy.value) return
+function selectModel(model: ModelInfo, variant?: string): void {
+  if (props.saving) return
   const next: ModelRef = { providerID: model.providerID, modelID: model.id, variant }
   if (isActiveModel(model, variant)) return
-  busy.value = true
-  try {
-    await requireClient().switchModel(props.sessionId, next, props.directory)
-    emit("change", next)
-  } finally {
-    busy.value = false
-  }
+  emit("change", next)
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -168,6 +168,31 @@ onMounted(() => {
         <p v-else-if="error" class="note note--error" role="alert">{{ error }}</p>
 
         <template v-else>
+          <p v-if="selectionError" class="note note--error" role="alert">
+            {{ selectionError }} Try again.
+          </p>
+          <div v-if="section === 'model' && models.length" class="model-search">
+            <AppIcon name="search" :size="15" class="model-search__icon" />
+            <input
+              v-model="modelQuery"
+              class="model-search__input"
+              type="search"
+              aria-label="Search models"
+              placeholder="Search models"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button
+              v-if="modelQuery"
+              type="button"
+              class="model-search__clear"
+              aria-label="Clear model search"
+              @click="modelQuery = ''"
+            >
+              <AppIcon name="close" :size="14" />
+            </button>
+          </div>
+
           <section v-if="section === 'agent'" class="group">
             <p v-if="runnableAgents.length === 0" class="note">
               No agents to choose from — the server's default is used.
@@ -179,7 +204,7 @@ onMounted(() => {
               class="row"
               :class="{ 'row--active': entry.id === agent }"
               :aria-current="entry.id === agent ? 'true' : undefined"
-              :disabled="busy"
+              :disabled="saving"
               @click="selectAgent(entry.id)"
             >
               <span class="row__body">
@@ -194,6 +219,9 @@ onMounted(() => {
             <p v-if="models.length === 0" class="note">
               No models to choose from — the server's default is used.
             </p>
+            <p v-else-if="modelsByProvider.length === 0" class="note">
+              No models match "{{ modelQuery }}".
+            </p>
             <div v-for="provider in modelsByProvider" :key="provider.providerID" class="provider">
               <h4 class="label provider__title">{{ provider.providerID }}</h4>
 
@@ -203,12 +231,14 @@ onMounted(() => {
                   class="row row--model"
                   :class="{ 'row--active': isActiveModel(entry) }"
                   :aria-current="isActiveModel(entry) ? 'true' : undefined"
-                  :disabled="busy"
+                  :disabled="saving"
                   @click="selectModel(entry)"
                 >
                   <span class="row__body">
                     <span class="row__name">{{ displayModel(entry) }}</span>
-                    <span v-if="entry.family" class="row__desc mono">{{ entry.id }}</span>
+                    <span v-if="entry.id !== displayModel(entry)" class="row__desc mono">{{
+                      entry.id
+                    }}</span>
                   </span>
                   <span v-if="isActiveModel(entry)" class="row__check" aria-hidden="true">✓</span>
                 </button>
@@ -220,7 +250,7 @@ onMounted(() => {
                     type="button"
                     class="variant"
                     :class="{ 'variant--active': isActiveModel(entry, variant) }"
-                    :disabled="busy"
+                    :disabled="saving"
                     @click="selectModel(entry, variant)"
                   >
                     {{ variant }}
@@ -278,15 +308,75 @@ onMounted(() => {
 }
 
 .sheet__close {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-muted);
-  padding: var(--space-1);
-  margin: calc(var(--space-1) * -1);
 }
 
 .sheet__body {
   flex: 1;
   min-height: 120px;
   border-top: 2px solid var(--rule);
+}
+
+.model-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px var(--space-5);
+  background: var(--surface);
+  border-bottom: 2px solid var(--rule-hair);
+}
+
+.model-search:focus-within {
+  border-bottom-color: var(--accent);
+}
+
+.model-search__icon {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.model-search__input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--text);
+  caret-color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.model-search__input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.model-search__input:focus {
+  outline: none;
+}
+
+.model-search__input::placeholder {
+  color: var(--text-dim);
+}
+
+.model-search__clear {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  color: var(--text-muted);
+}
+
+.model-search__clear:hover {
+  color: var(--text);
 }
 
 .group {
@@ -375,6 +465,7 @@ onMounted(() => {
 }
 
 .variant {
+  min-height: 40px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);

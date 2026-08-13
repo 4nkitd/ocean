@@ -37,6 +37,7 @@ export type IconName =
   | "upload"
   | "alert"
   | "terminal"
+  | "mic"
 
 const props = withDefaults(
   defineProps<{
@@ -70,8 +71,7 @@ const paths: Record<IconName, string> = {
   "git-branch":
     '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 9v6M18 9v1a5 5 0 0 1-5 5H9"/>',
   chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
-  grid:
-    '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>',
+  grid: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   list: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M16.9 16.9l2.1 2.1M4.9 19.1l2.1-2.1M16.9 7.1l2.1-2.1"/>',
@@ -80,10 +80,10 @@ const paths: Record<IconName, string> = {
   upload: '<path d="M12 19V5M6 11l6-6 6 6"/><path d="M4 21h16"/>',
   alert: '<path d="M12 3L2 20h20L12 3z"/><path d="M12 10v4M12 17v.5"/>',
   terminal: '<path d="M4 6l6 6-6 6"/><path d="M13 18h7"/>',
+  mic: '<path d="M9 4h6v9H9z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>',
   // The Model Context Protocol mark, kept at the artwork's own 195 grid (see
   // `viewBoxes`) rather than re-traced by hand — the curves are the logo.
-  mcp:
-    '<path d="M25 97.8528L92.8823 29.9706C102.255 20.598 117.451 20.598 126.823 29.9706C136.196 39.3431 136.196 54.5391 126.823 63.9117L75.5581 115.177"/><path d="M76.2653 114.47L126.823 63.9117C136.196 54.5391 151.392 54.5391 160.765 63.9117C170.491 73.6378 170.491 88.8338 161.118 98.2063L99.7248 159.6C96.6006 162.724 96.6006 167.789 99.7248 170.913L112.331 183.52"/>',
+  mcp: '<path d="M25 97.8528L92.8823 29.9706C102.255 20.598 117.451 20.598 126.823 29.9706C136.196 39.3431 136.196 54.5391 126.823 63.9117L75.5581 115.177"/><path d="M76.2653 114.47L126.823 63.9117C136.196 54.5391 151.392 54.5391 160.765 63.9117C170.491 73.6378 170.491 88.8338 161.118 98.2063L99.7248 159.6C96.6006 162.724 96.6006 167.789 99.7248 170.913L112.331 183.52"/>',
 }
 
 /** Glyphs drawn on their own grid instead of the set's 24 units. */
@@ -109,8 +109,6 @@ const viewBox = computed(() => viewBoxes[props.name] ?? "0 0 24 24")
 </template>
 
 <style scoped>
-
-
 .icon {
   flex: none;
   display: block;

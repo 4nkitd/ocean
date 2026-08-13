@@ -10,15 +10,26 @@
  * Three answers, in the order a person actually wants them: allow this once,
  * allow this kind of thing for the rest of the session, or refuse.
  */
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import type { PermissionReply, PermissionRequest } from "@/api/types"
 import { basename } from "@/lib/format"
 import AppIcon from "@/components/ui/AppIcon.vue"
 
-const props = defineProps<{ request: PermissionRequest; pending: number }>()
+const props = defineProps<{
+  request: PermissionRequest
+  pending: number
+  error?: string | null
+}>()
 const emit = defineEmits<{ reply: [id: string, reply: PermissionReply] }>()
 
 const busy = ref<PermissionReply | null>(null)
+
+watch(
+  () => [props.request.id, props.error],
+  () => {
+    if (props.error || busy.value) busy.value = null
+  },
+)
 
 /** `edit`, `bash`, `webfetch` — what the agent is asking to be allowed to do. */
 const action = computed(() => props.request.action || "run")
@@ -59,6 +70,7 @@ function reply(answer: PermissionReply): void {
       <span class="ask__title">{{ title }}</span>
     </p>
     <p v-if="subtitle" class="ask__path">{{ subtitle }}</p>
+    <p v-if="error" class="ask__error" role="alert">{{ error }} Try again.</p>
 
     <div class="ask__actions">
       <button
@@ -156,6 +168,14 @@ function reply(answer: PermissionReply): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ask__error {
+  margin-top: 8px;
+  color: var(--accent-500);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .ask__actions {

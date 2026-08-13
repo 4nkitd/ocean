@@ -31,48 +31,45 @@ function open() {
 
 <template>
   <li class="card" :class="{ 'card--active': active }">
-    <component
-      :is="reordering ? 'div' : 'button'"
-      class="card__row"
-      :type="reordering ? undefined : 'button'"
-      @click="open"
-    >
-      <span class="card__tile" aria-hidden="true">{{ project.initials }}</span>
+    <div class="card__row">
+      <component
+        :is="reordering ? 'div' : 'button'"
+        class="card__main"
+        :type="reordering ? undefined : 'button'"
+        @click="open"
+      >
+        <span class="card__tile" aria-hidden="true">{{ project.initials }}</span>
 
-      <span class="card__body">
-        <span class="card__name">{{ project.name }}</span>
-        <span class="card__path">{{ project.displayPath }}</span>
-        <span class="card__meta">
-          <span v-if="project.isGit" class="card__chip">{{ project.branch ?? "git" }}</span>
-          <span v-else class="card__chip card__chip--norepo">no repo</span>
-          <span class="card__sessions">
-            {{ project.sessionCount }} {{ project.sessionCount === 1 ? "session" : "sessions" }}
+        <span class="card__body">
+          <span class="card__name">{{ project.name }}</span>
+          <span class="card__path">{{ project.displayPath }}</span>
+          <span class="card__meta">
+            <span v-if="project.isGit" class="card__chip">{{ project.branch ?? "git" }}</span>
+            <span v-else class="card__chip card__chip--norepo">no repo</span>
+            <span class="card__sessions">
+              {{ project.sessionCount }} {{ project.sessionCount === 1 ? "session" : "sessions" }}
+            </span>
           </span>
         </span>
-      </span>
+      </component>
 
       <span v-if="!reordering" class="card__trail">
-        <!-- A real control inside the row, so it is stopped from opening it. -->
-        <span
+        <button
+          type="button"
           class="card__star"
           :class="{ 'card__star--on': project.favourite }"
-          role="button"
-          tabindex="0"
           :aria-pressed="project.favourite"
           :aria-label="project.favourite ? `Unpin ${project.name}` : `Pin ${project.name}`"
-          @click.stop="emit('favourite')"
-          @keydown.enter.stop.prevent="emit('favourite')"
-          @keydown.space.stop.prevent="emit('favourite')"
-          >★</span
+          @click="emit('favourite')"
         >
-        <!-- The dot is the only running indicator on this screen, so it is
-             labelled rather than left as decoration. -->
+          ★
+        </button>
         <span v-if="project.running" class="card__dot" role="img" aria-label="Session running" />
         <span class="card__time">{{
           shortRelativeTime(project.lastActivity) || "no activity"
         }}</span>
       </span>
-    </component>
+    </div>
 
     <div v-if="reordering" class="card__move">
       <button
@@ -116,6 +113,16 @@ function open() {
   display: flex;
   gap: 14px;
   padding: var(--space-4) var(--space-5);
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.card__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 14px;
   text-align: left;
   color: inherit;
   font: inherit;
@@ -221,7 +228,11 @@ function open() {
 }
 
 .card__star {
-  display: block;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 13px;
   line-height: 1;
   color: var(--text-faint);
@@ -266,7 +277,7 @@ function open() {
   transform: rotate(180deg);
 }
 
-button.card__row:active {
+button.card__main:active {
   background: var(--surface-sunken);
 }
 

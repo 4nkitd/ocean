@@ -14,6 +14,7 @@ import { useRoute, useRouter } from "vue-router"
 import { toUserMessage } from "@/api/errors"
 import type {
   CommandInfo,
+  FormAnswer,
   GitCommit,
   ModelRef,
   PermissionReply,
@@ -36,10 +37,13 @@ import StateBlock from "@/components/ui/StateBlock.vue"
 import MessageBubble from "@/components/chat/MessageBubble.vue"
 import ModelAgentSheet from "@/components/chat/ModelAgentSheet.vue"
 import McpSheet from "@/components/mcp/McpSheet.vue"
+import FormCard from "@/components/chat/FormCard.vue"
 import PermissionCard from "@/components/chat/PermissionCard.vue"
 import PromptComposer from "@/components/chat/PromptComposer.vue"
 import QuestionCard from "@/components/chat/QuestionCard.vue"
 import QueuedPrompts from "@/components/chat/QueuedPrompts.vue"
+import TodoDock from "@/components/chat/TodoDock.vue"
+import { useSessionTodos } from "@/stores/todos"
 
 const route = useRoute()
 const router = useRouter()
@@ -53,6 +57,8 @@ const sessionId = computed(() =>
 const projectPath = computed(() => `/p/${encodePathParam(directory.value)}`)
 const streamConnected = connection.streamConnected
 const terminalOpen = terminal.open
+const header = ref<HTMLElement | null>(null)
+const mobileMenuOpen = ref(false)
 
 /**
  * The centre pane's tabs. Chat is always present and is not in this list; a
@@ -80,9 +86,12 @@ const {
   retry,
   abort,
   reload,
+  statusNote,
   respondPermission,
   respondQuestion,
   rejectQuestion,
+  respondForm,
+  cancelForm,
   runCommand,
   cancelQueued,
   setQueuedDelivery,
@@ -91,26 +100,65 @@ const {
   setAgent,
   setModel,
   questions,
+  forms,
 } = useSession(sessionId, directory)
+
+/** The plan the agent is working through, read back out of the transcript. */
+const { todos } = useSessionTodos(messages)
 
 /** The agent answers one request at a time, so only the oldest is actionable. */
 const blocking = computed(() => permissions.value[0] ?? null)
 const question = computed(() => questions.value[0] ?? null)
+const form = computed(() => forms.value[0] ?? null)
+const permissionError = ref<string | null>(null)
+const questionError = ref<string | null>(null)
+const formError = ref<string | null>(null)
+const selectorError = ref<string | null>(null)
+const selectorBusy = ref(false)
 
 async function onPermissionReply(id: string, reply: PermissionReply): Promise<void> {
+  permissionError.value = null
   try {
     await respondPermission(id, reply)
-  } catch {
-    // The store puts the card back; there is nothing else useful to say.
+  } catch (cause) {
+    permissionError.value = toUserMessage(cause)
   }
 }
 
-function onQuestionReply(id: string, answers: string[][]): void {
-  void respondQuestion(id, answers).catch(() => undefined)
+async function onQuestionReply(id: string, answers: string[][]): Promise<void> {
+  questionError.value = null
+  try {
+    await respondQuestion(id, answers)
+  } catch (cause) {
+    questionError.value = toUserMessage(cause)
+  }
 }
 
-function onQuestionDismiss(id: string): void {
-  void rejectQuestion(id).catch(() => undefined)
+async function onQuestionDismiss(id: string): Promise<void> {
+  questionError.value = null
+  try {
+    await rejectQuestion(id)
+  } catch (cause) {
+    questionError.value = toUserMessage(cause)
+  }
+}
+
+async function onFormReply(id: string, answer: FormAnswer): Promise<void> {
+  formError.value = null
+  try {
+    await respondForm(id, answer)
+  } catch (cause) {
+    formError.value = toUserMessage(cause)
+  }
+}
+
+async function onFormCancel(id: string): Promise<void> {
+  formError.value = null
+  try {
+    await cancelForm(id)
+  } catch (cause) {
+    formError.value = toUserMessage(cause)
+  }
 }
 
 /**
@@ -147,13 +195,70 @@ const modelLabel = computed(() => {
 const agentLabel = computed(() => agent.value)
 
 function onSheetChange(next: ModelRef | null): void {
-  if (next) void setModel(next)
-  sheetSection.value = null
+  if (!next || selectorBusy.value) return
+  selectorBusy.value = true
+  selectorError.value = null
+  void setModel(next)
+    .then(() => {
+      sheetSection.value = null
+    })
+    .catch((cause) => {
+      selectorError.value = toUserMessage(cause)
+    })
+    .finally(() => {
+      selectorBusy.value = false
+    })
 }
 
 function onAgentChange(next: string): void {
+  if (selectorBusy.value) return
+  selectorBusy.value = true
+  selectorError.value = null
   void setAgent(next)
-  sheetSection.value = null
+    .then(() => {
+      sheetSection.value = null
+    })
+    .catch((cause) => {
+      selectorError.value = toUserMessage(cause)
+    })
+    .finally(() => {
+      selectorBusy.value = false
+    })
+}
+
+function openSelector(section: "model" | "agent"): void {
+  selectorError.value = null
+  sheetSection.value = section
+}
+
+function onHeaderPointerDown(event: PointerEvent): void {
+  if (mobileMenuOpen.value && !header.value?.contains(event.target as Node)) {
+    mobileMenuOpen.value = false
+  }
+}
+
+function onHeaderKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") mobileMenuOpen.value = false
+}
+
+function openMcpFromMenu(): void {
+  mobileMenuOpen.value = false
+  mcpOpen.value = true
+}
+
+function openProjectsFromMenu(): void {
+  mobileMenuOpen.value = false
+  void router.push("/projects")
+}
+
+function openSessionsFromMenu(): void {
+  mobileMenuOpen.value = false
+  void router.push(projectPath.value)
+}
+
+function startNewSessionFromMenu(): void {
+  mobileMenuOpen.value = false
+  void startNewSession()
 }
 
 // ── header ───────────────────────────────────────────────────────────────
@@ -336,10 +441,16 @@ onMounted(() => {
   desktopQuery = window.matchMedia("(min-width: 1080px)")
   isDesktop.value = desktopQuery.matches
   desktopQuery.addEventListener("change", onDesktopChange)
+  document.addEventListener("pointerdown", onHeaderPointerDown)
+  window.addEventListener("keydown", onHeaderKeydown)
   void loadCommands()
 })
 
-onUnmounted(() => desktopQuery?.removeEventListener("change", onDesktopChange))
+onUnmounted(() => {
+  desktopQuery?.removeEventListener("change", onDesktopChange)
+  document.removeEventListener("pointerdown", onHeaderPointerDown)
+  window.removeEventListener("keydown", onHeaderKeydown)
+})
 
 function selectDesktopTab(id: string): void {
   activeDesktopTab.value = id
@@ -416,7 +527,7 @@ watch(
     />
 
     <div class="screen__core">
-      <header class="head">
+      <header ref="header" class="head">
         <button type="button" class="head__back" aria-label="Back to project" @click="goBack">
           <AppIcon name="arrow-left" :size="18" />
         </button>
@@ -444,47 +555,46 @@ watch(
             v-if="!isDesktop"
             type="button"
             class="head__action"
-            aria-label="MCP servers"
-            title="MCP servers"
-            @click="mcpOpen = true"
+            aria-label="Session actions"
+            :aria-expanded="mobileMenuOpen"
+            title="Session actions"
+            @click="mobileMenuOpen = !mobileMenuOpen"
           >
-            <AppIcon name="mcp" :size="18" />
+            <AppIcon name="more" :size="18" />
+          </button>
+        </div>
+
+        <nav v-if="!isDesktop && mobileMenuOpen" class="head__menu" aria-label="Session actions">
+          <button type="button" class="head__menu-item" @click="openMcpFromMenu">
+            <AppIcon name="mcp" :size="16" />
+            <span>MCP servers</span>
+          </button>
+          <button type="button" class="head__menu-item" @click="openProjectsFromMenu">
+            <AppIcon name="grid" :size="16" />
+            <span>All projects</span>
+          </button>
+          <button type="button" class="head__menu-item" @click="openSessionsFromMenu">
+            <AppIcon name="list" :size="16" />
+            <span>Session list</span>
           </button>
           <button
             type="button"
-            class="head__action"
-            aria-label="All projects"
-            title="All projects"
-            @click="router.push('/projects')"
-          >
-            <AppIcon name="grid" :size="18" />
-          </button>
-          <button
-            type="button"
-            class="head__action"
-            aria-label="Session list — switch to another session"
-            title="Session list"
-            @click="router.push(projectPath)"
-          >
-            <AppIcon name="list" :size="18" />
-          </button>
-          <button
-            type="button"
-            class="head__action"
-            aria-label="Start a new session in this directory"
+            class="head__menu-item"
             :disabled="creating"
-            @click="startNewSession"
+            @click="startNewSessionFromMenu"
           >
             <AppIcon
               :name="creating ? 'spinner' : 'plus'"
-              :size="18"
+              :size="16"
               :class="{ head__spin: creating }"
             />
+            <span>New session</span>
           </button>
-        </div>
+        </nav>
       </header>
 
       <p v-if="createError" class="head__error" role="alert">{{ createError }}</p>
+      <p v-if="statusNote" class="head__status" role="status">{{ statusNote }}</p>
 
       <nav v-if="desktopTabs.length" class="desktop-tabs" aria-label="Open workspace tabs">
         <button
@@ -575,16 +685,15 @@ watch(
           </button>
         </div>
 
-        <QueuedPrompts
-          :items="queued"
-          @cancel="cancelQueued"
-          @delivery="setQueuedDelivery"
-        />
+        <TodoDock v-if="!isDesktop && todos.length" :todos="todos" />
+
+        <QueuedPrompts :items="queued" @cancel="cancelQueued" @delivery="setQueuedDelivery" />
 
         <PermissionCard
           v-if="blocking"
           :request="blocking"
           :pending="permissions.length"
+          :error="permissionError"
           @reply="onPermissionReply"
         />
 
@@ -593,8 +702,19 @@ watch(
           :key="question.id"
           :request="question"
           :pending="questions.length"
+          :error="questionError"
           @reply="onQuestionReply"
           @dismiss="onQuestionDismiss"
+        />
+
+        <FormCard
+          v-if="form"
+          :key="form.id"
+          :request="form"
+          :pending="forms.length"
+          :error="formError"
+          @reply="onFormReply"
+          @cancel="onFormCancel"
         />
 
         <PromptComposer
@@ -607,7 +727,7 @@ watch(
           :commands="commands"
           @send="onSend"
           @abort="abort"
-          @selectors="sheetSection = $event"
+          @selectors="openSelector"
           @update:delivery="deliveryMode = $event"
         />
 
@@ -618,6 +738,8 @@ watch(
           :agent="agent"
           :model="model"
           :section="sheetSection"
+          :saving="selectorBusy"
+          :selection-error="selectorError"
           @close="sheetSection = null"
           @change="onSheetChange"
           @agent-change="onAgentChange"
@@ -633,6 +755,7 @@ watch(
       v-if="isDesktop"
       :directory="directory"
       :is-repo="isRepo"
+      :todos="todos"
       @open-file="openWorkspaceFile"
       @open-diff="openWorkspaceDiff"
       @open-commit="openDesktopCommit"
@@ -654,18 +777,19 @@ watch(
 }
 
 .head {
+  position: relative;
   flex: none;
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: calc(var(--safe-top) + 20px) 20px 14px;
+  padding: calc(var(--safe-top) + 10px) 20px 10px;
   border-bottom: 2px solid var(--rule);
 }
 
 .head__back {
   flex: none;
-  width: 28px;
-  height: 40px;
+  width: 26px;
+  height: 34px;
   display: flex;
   align-items: center;
   color: var(--text-muted);
@@ -678,19 +802,20 @@ watch(
 }
 
 .head__title {
-  font-size: 22px;
+  font-size: 16px;
+  line-height: 1.25;
   letter-spacing: -0.01em;
-  /* On a narrow phone the actions leave the title barely a word's width, and a
-     title is one long word often enough — clip it like the path below. */
+  /* The header is a bar, not a title page: one line, clipped. A long session
+     title would otherwise wrap to four or five lines and eat the transcript. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .head__sub {
-  margin-top: 3px;
+  margin-top: 2px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -704,6 +829,15 @@ watch(
   font-size: 10px;
 }
 
+.head__status {
+  flex: none;
+  padding: 8px var(--space-5);
+  border-bottom: 1px solid var(--rule);
+  color: var(--accent-500);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
 .head__actions {
   flex: none;
   display: flex;
@@ -712,8 +846,8 @@ watch(
 
 .head__action {
   flex: none;
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -731,6 +865,44 @@ watch(
 }
 
 .head__action:disabled {
+  opacity: 0.5;
+}
+
+.head__menu {
+  position: absolute;
+  top: calc(100% - 6px);
+  right: var(--space-5);
+  z-index: 30;
+  width: min(228px, calc(100vw - 40px));
+  background: var(--surface-raised);
+  border: 2px solid var(--rule);
+  box-shadow: 0 16px 36px rgb(0 0 0 / 0.35);
+}
+
+.head__menu-item {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--rule-hair);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: left;
+}
+
+.head__menu-item:last-child {
+  border-bottom: 0;
+}
+
+.head__menu-item:active:not(:disabled) {
+  background: var(--surface-sunken);
+  color: var(--text);
+}
+
+.head__menu-item:disabled {
   opacity: 0.5;
 }
 
@@ -871,14 +1043,19 @@ watch(
 
 @media (min-width: 760px) {
   .head {
-    padding: calc(var(--safe-top) + 20px) 28px 16px;
+    padding: calc(var(--safe-top) + 12px) 28px 12px;
   }
 
   .head__title {
-    font-size: 24px;
+    font-size: 18px;
   }
 
   .head__error {
+    padding-left: 28px;
+    padding-right: 28px;
+  }
+
+  .head__status {
     padding-left: 28px;
     padding-right: 28px;
   }
