@@ -25,6 +25,8 @@ import type {
   ServerCredentials,
   ServerEvent,
   Session,
+  ShellChunk,
+  ShellCommand,
   ShellResult,
   ToolState,
   VcsCommitResult,
@@ -294,6 +296,84 @@ export class OpenCodeClient {
         () => undefined,
       )
     }
+  }
+
+  /**
+   * Start a command and return straight away.
+   *
+   * `runShell` above is the right shape for the one-shot commands the Git
+   * screens run. A terminal is the other shape: the caller wants the output as
+   * it is printed, so it owns the record instead — poll `getShell`, page the
+   * output with `readShellOutput`, and `removeShell` when finished.
+   */
+  async startShell(
+    directory: string,
+    command: string,
+    options: { cwd?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<ShellCommand> {
+    const started = await this.data<ShellInfo>("/shell", {
+      method: "POST",
+      query: at(directory),
+      body: {
+        command,
+        cwd: options.cwd || directory,
+        timeout: options.timeoutMs ?? 600_000,
+      },
+      signal: options.signal,
+    })
+    if (!started?.id) throw new ApiError("server", "The server did not start the command")
+    return { id: started.id, status: started.status, exit: started.exit ?? null }
+  }
+
+  /** Status and exit code of a started command. */
+  async getShell(
+    directory: string,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ShellCommand | null> {
+    const info = await this.data<ShellInfo>(`/shell/${encodeURIComponent(id)}`, {
+      query: at(directory),
+      signal,
+      optional: true,
+    })
+    if (!info) return null
+    return { id: info.id ?? id, status: info.status, exit: info.exit ?? null }
+  }
+
+  /**
+   * The next page of combined output. `cursor` is an absolute byte offset, so
+   * handing back the one from the previous page streams a running command
+   * without re-reading what has already been printed.
+   */
+  async readShellOutput(
+    directory: string,
+    id: string,
+    cursor = 0,
+    signal?: AbortSignal,
+  ): Promise<ShellChunk> {
+    const page = await this.data<{ output?: string; cursor?: number; truncated?: boolean }>(
+      `/shell/${encodeURIComponent(id)}/output`,
+      { query: { ...at(directory), cursor }, signal },
+    )
+    const output = page?.output ?? ""
+    // The server reports where it left off, but only its own cursor advances
+    // the read — if it echoes the request back, count the bytes ourselves so
+    // the next page cannot repeat this one forever.
+    const reported = Number(page?.cursor)
+    const nextCursor =
+      Number.isFinite(reported) && reported > cursor
+        ? reported
+        : cursor + new TextEncoder().encode(output).length
+    return { output, cursor: nextCursor, truncated: page?.truncated === true }
+  }
+
+  /** Drop the record, killing the process if it is still running. */
+  async removeShell(directory: string, id: string): Promise<void> {
+    await this.request(`/shell/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      query: at(directory),
+      optional: true,
+    }).catch(() => undefined)
   }
 
   // ── vcs ─────────────────────────────────────────────────────────────────

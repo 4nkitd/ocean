@@ -25,6 +25,7 @@ const groups: Group[] = [
       { keys: ["g", "a"], label: "Go to active sessions" },
       { keys: ["g", "r"], label: "Go to recent" },
       { keys: ["g", "s"], label: "Go to server" },
+      { keys: ["Ctrl", "`"], label: "Terminal" },
       { keys: ["Esc"], label: "Close what is open" },
     ],
   },

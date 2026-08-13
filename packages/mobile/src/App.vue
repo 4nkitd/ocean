@@ -10,10 +10,15 @@
 import { RouterView } from "vue-router"
 import ErrorBoundary from "@/components/ui/ErrorBoundary.vue"
 import ShortcutSheet from "@/components/ui/ShortcutSheet.vue"
+import TerminalPanel from "@/components/terminal/TerminalPanel.vue"
 import { useShortcuts } from "@/stores/shortcuts"
+import { terminal } from "@/stores/terminal"
 
 /** Mounted once here so `?` and the `g` prefix work on every screen. */
 const { helpOpen } = useShortcuts()
+
+/** Above the router view so the drawer survives a route change. */
+const terminalOpen = terminal.open
 </script>
 
 <template>
@@ -33,6 +38,8 @@ const { helpOpen } = useShortcuts()
         </RouterView>
       </ErrorBoundary>
     </main>
+
+    <TerminalPanel v-if="terminalOpen" />
 
     <ShortcutSheet v-if="helpOpen" @close="helpOpen = false" />
   </div>

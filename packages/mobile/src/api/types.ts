@@ -307,6 +307,22 @@ export interface ShellResult {
   status: "running" | "exited" | "timeout" | "killed"
 }
 
+/** `GET /api/shell/{id}` — where a started command has got to. */
+export interface ShellCommand {
+  id: string
+  status: "running" | "exited" | "timeout" | "killed"
+  exit: number | null
+}
+
+/** `GET /api/shell/{id}/output` — one page of the captured combined output. */
+export interface ShellChunk {
+  output: string
+  /** Absolute byte offset to resume from on the next read. */
+  cursor: number
+  /** Bytes were dropped before this page because the capture wrapped. */
+  truncated: boolean
+}
+
 /** `GET /api/event` — one frame of the server's SSE stream. */
 export interface ServerEvent {
   type: string

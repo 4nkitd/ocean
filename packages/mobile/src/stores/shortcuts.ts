@@ -1,5 +1,6 @@
 import { onMounted, onUnmounted, ref } from "vue"
 import { useRouter } from "vue-router"
+import { toggleTerminal } from "@/stores/terminal"
 
 /**
  * App-wide keyboard shortcuts.
@@ -33,6 +34,15 @@ export function useShortcuts() {
   }
 
   function onKey(event: KeyboardEvent): void {
+    // The one chord in the app, and the one exception to the typing rule: the
+    // terminal has to be reachable from the composer, and closable from its own
+    // command line, so it cannot wait for a field to give the key back.
+    if (event.ctrlKey && !event.metaKey && !event.altKey && isBackquote(event)) {
+      event.preventDefault()
+      toggleTerminal()
+      return
+    }
+
     if (event.metaKey || event.ctrlKey || event.altKey) return
 
     if (event.key === "Escape") {
@@ -85,6 +95,11 @@ export function useShortcuts() {
   })
 
   return { helpOpen }
+}
+
+/** `code` for the physical key, `key` for the layouts that move it. */
+function isBackquote(event: KeyboardEvent): boolean {
+  return event.code === "Backquote" || event.key === "`" || event.key === "~"
 }
 
 /**

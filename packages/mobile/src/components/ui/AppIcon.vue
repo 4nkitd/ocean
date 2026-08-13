@@ -36,6 +36,7 @@ export type IconName =
   | "refresh"
   | "upload"
   | "alert"
+  | "terminal"
 
 const props = withDefaults(
   defineProps<{
@@ -78,6 +79,7 @@ const paths: Record<IconName, string> = {
   refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
   upload: '<path d="M12 19V5M6 11l6-6 6 6"/><path d="M4 21h16"/>',
   alert: '<path d="M12 3L2 20h20L12 3z"/><path d="M12 10v4M12 17v.5"/>',
+  terminal: '<path d="M4 6l6 6-6 6"/><path d="M13 18h7"/>',
   // The Model Context Protocol mark, kept at the artwork's own 195 grid (see
   // `viewBoxes`) rather than re-traced by hand — the curves are the logo.
   mcp:

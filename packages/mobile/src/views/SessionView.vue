@@ -29,6 +29,7 @@ import { decodePathParam, encodePathParam } from "@/router"
 import { connection, isDirectoryGitRepo, requireClient } from "@/stores/connection"
 import { useSession } from "@/stores/session"
 import { useScreenShortcuts } from "@/stores/shortcuts"
+import { terminal, toggleTerminal } from "@/stores/terminal"
 import AppIcon from "@/components/ui/AppIcon.vue"
 import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
 import StateBlock from "@/components/ui/StateBlock.vue"
@@ -50,6 +51,7 @@ const sessionId = computed(() =>
 )
 const projectPath = computed(() => `/p/${encodePathParam(directory.value)}`)
 const streamConnected = connection.streamConnected
+const terminalOpen = terminal.open
 
 /**
  * The centre pane's tabs. Chat is always present and is not in this list; a
@@ -416,6 +418,16 @@ watch(
 
         <div class="head__actions">
           <button
+            type="button"
+            class="head__action head__action--keep"
+            :class="{ 'head__action--on': terminalOpen }"
+            aria-label="Terminal — Ctrl+`"
+            title="Terminal (Ctrl+`)"
+            @click="toggleTerminal(directory)"
+          >
+            <AppIcon name="terminal" :size="18" />
+          </button>
+          <button
             v-if="!isDesktop"
             type="button"
             class="head__action"
@@ -646,6 +658,11 @@ watch(
 .head__title {
   font-size: 22px;
   letter-spacing: -0.01em;
+  /* On a narrow phone the actions leave the title barely a word's width, and a
+     title is one long word often enough — clip it like the path below. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .head__sub {
@@ -684,6 +701,11 @@ watch(
 
 .head__action:active:not(:disabled) {
   background: var(--surface-raised);
+}
+
+.head__action--on {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .head__action:disabled {
@@ -871,8 +893,13 @@ watch(
     flex-direction: column;
   }
 
-  .head__back,
-  .head__actions {
+  .head__back {
+    display: none;
+  }
+
+  /* The sidebar and workspace panel already carry these on a wide screen —
+     except the terminal, which has no home of its own. */
+  .head__actions > :not(.head__action--keep) {
     display: none;
   }
 
