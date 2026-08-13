@@ -6,6 +6,7 @@ import AppIcon from "@/components/ui/AppIcon.vue"
 import { basename, displayPath, relativeTime } from "@/lib/format"
 import { onServerEvent, requireClient } from "@/stores/connection"
 import { sessionIdOf, readString } from "@/stores/projects"
+import ServerSwitcher from "@/components/desktop/ServerSwitcher.vue"
 
 const props = defineProps<{
   directory: string
@@ -187,10 +188,7 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <footer class="sessions__foot">
-      <span class="sessions__foot-dot" />
-      <span>Connected workspace</span>
-    </footer>
+    <ServerSwitcher />
   </aside>
 </template>
 
