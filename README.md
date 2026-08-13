@@ -33,7 +33,8 @@ interface. Talks to the opencode server over its HTTP API and SSE event stream.
 - Terminal drawer on <kbd>Ctrl</kbd>+<kbd>`</kbd> (or the button beside the
   session title): commands run through the server's shell endpoint with output
   streamed live, `Ctrl+C` to kill, and `cd` tracked between commands
-- Multi-server management, PWA manifest, dark Modernist design system
+- Multi-server management, PWA manifest, dark/light/system themes, and normal
+  or high contrast modes in Server settings
 
 ## Setup
 

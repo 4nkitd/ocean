@@ -37,6 +37,10 @@
      off-white reads as a tint, and the design uses #fff on every accent fill. */
   --on-accent: #ffffff;
 
+  /* The one non-red signal: "connected". Red is the accent, so it cannot also
+     mean healthy, and a grey dot reads as disabled. */
+  --ok: #52b788;
+
   /* Scrim behind a modal sheet. Black, not --bg, so it darkens the shell it
      covers instead of blending into it. */
   --scrim: color-mix(in srgb, #000 62%, transparent);
@@ -66,4 +70,67 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
+}
+
+:root[data-theme="light"] {
+  --bg: #f3f1ef;
+  --surface: #ffffff;
+  --surface-raised: #f5f2ef;
+  --surface-sunken: #e8e4df;
+  --rule: #cbc4be;
+  --rule-hair: #e4dfdb;
+  --text: #1b1918;
+  --text-secondary: #514b47;
+  --text-muted: #6b645f;
+  --text-dim: #877e77;
+  --text-faint: #9c9188;
+  --accent: #c52b12;
+  --accent-300: #9e1e0b;
+  --accent-400: #b52510;
+  --accent-500: #d33a20;
+  --accent-600: #a9200d;
+  --accent-700: #851705;
+  --on-accent: #ffffff;
+  --ok: #1f7a52;
+  --scrim: color-mix(in srgb, #000 42%, transparent);
+  --diff-add-bg: #e9f0e8;
+  --diff-del-bg: #f3e9e7;
+  --diff-del-text: #7d6964;
+}
+
+:root[data-contrast="high"] {
+  --rule: #696969;
+  --rule-hair: #4d4d4d;
+  --text: #ffffff;
+  --text-secondary: #eeeeee;
+  --text-muted: #d0d0d0;
+  --text-dim: #adadad;
+  --text-faint: #909090;
+  --accent: #ff593d;
+  --accent-300: #ffd0c7;
+  --accent-400: #ff9b89;
+  --accent-500: #ff735b;
+  --ok: #6fd6a3;
+}
+
+:root[data-theme="light"][data-contrast="high"] {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-raised: #f0f0f0;
+  --surface-sunken: #e4e4e4;
+  --rule: #555555;
+  --rule-hair: #999999;
+  --text: #000000;
+  --text-secondary: #1a1a1a;
+  --text-muted: #3d3d3d;
+  --text-dim: #666666;
+  --text-faint: #777777;
+  --accent: #a9210d;
+  --accent-300: #7f1708;
+  --accent-400: #941c0b;
+  --accent-500: #b42a14;
+  --ok: #10603c;
+  --diff-add-bg: #e3f0e2;
+  --diff-del-bg: #f5e5e2;
+  --diff-del-text: #5f4b46;
 }

@@ -97,10 +97,12 @@ available rather than pretending the repository is empty.
 
 ### The design system
 
-`styles/tokens.css` is the dark inversion of the upstream "Modernist" system: flat,
-architectural, **zero corner radius**, 2px rules between sections and 1px between rows,
-Archivo for text and a monospace face for every path, count and timestamp. Ramp steps keep
-their upstream names, so `--accent-500` is the same `#ff563c` in both themes.
+`styles/tokens.css` is the dark base of the upstream "Modernist" system, with light and
+high-contrast overrides: flat, architectural, **zero corner radius**, 2px rules between
+sections and 1px between rows, Archivo for text and a monospace face for every path, count
+and timestamp. Theme and contrast preferences live in Server settings and persist locally.
+Ramp steps keep their upstream names, so `--accent-500` is the same `#ff563c` in the dark
+base and its high-contrast variant.
 
 Two rules are easy to break by accident and load-bearing when kept: nothing has a border
 radius, and button labels sit flush left with the trailing icon pushed to the edge. Take

@@ -15,6 +15,7 @@ import BottomNav, { type NavTab } from "@/components/ui/BottomNav.vue"
 import StateBlock from "@/components/ui/StateBlock.vue"
 import { displayPath, relativeTime } from "@/lib/format"
 import { connection, disconnect, switchServer } from "@/stores/connection"
+import { appearance, type ContrastMode, type ThemeMode } from "@/stores/appearance"
 
 const router = useRouter()
 
@@ -36,6 +37,20 @@ const streamConnected = computed(() => connection.streamConnected.value)
 const recents = computed(() => connection.recents.value)
 const switching = ref<string | null>(null)
 const switchError = ref<string | null>(null)
+const themeMode = appearance.themeMode
+const contrastMode = appearance.contrastMode
+const resolvedTheme = appearance.resolvedTheme
+
+const themeOptions: { value: ThemeMode; label: string }[] = [
+  { value: "system", label: "System" },
+  { value: "dark", label: "Dark" },
+  { value: "light", label: "Light" },
+]
+
+const contrastOptions: { value: ContrastMode; label: string }[] = [
+  { value: "normal", label: "Normal" },
+  { value: "high", label: "High" },
+]
 
 function detach(): void {
   disconnect()
@@ -146,6 +161,51 @@ function metaFor(entry: Readonly<RecentServer>): string {
           <AppButton icon="arrow-right" @click="attachAnother">Attach to a server</AppButton>
         </div>
       </template>
+
+      <section class="appearance" aria-labelledby="appearance-title">
+        <div class="appearance__head">
+          <div>
+            <h2 id="appearance-title" class="label appearance__title">Appearance</h2>
+            <p class="appearance__summary">
+              {{ resolvedTheme }} theme · {{ contrastMode === "high" ? "high" : "normal" }} contrast
+            </p>
+          </div>
+        </div>
+
+        <div class="appearance__group">
+          <span class="appearance__label">Theme</span>
+          <div class="appearance__options" role="group" aria-label="Theme">
+            <button
+              v-for="option in themeOptions"
+              :key="option.value"
+              type="button"
+              class="appearance__option"
+              :class="{ 'appearance__option--active': themeMode === option.value }"
+              :aria-pressed="themeMode === option.value"
+              @click="appearance.setThemeMode(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+
+        <div class="appearance__group">
+          <span class="appearance__label">Contrast</span>
+          <div class="appearance__options" role="group" aria-label="Contrast">
+            <button
+              v-for="option in contrastOptions"
+              :key="option.value"
+              type="button"
+              class="appearance__option"
+              :class="{ 'appearance__option--active': contrastMode === option.value }"
+              :aria-pressed="contrastMode === option.value"
+              @click="appearance.setContrastMode(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+      </section>
 
       <div class="rule" />
       <h2 class="label servers__title">Saved servers</h2>
@@ -272,6 +332,73 @@ function metaFor(entry: Readonly<RecentServer>): string {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-6) calc(20px + var(--safe-right)) 0 calc(20px + var(--safe-left));
+}
+
+.appearance {
+  margin: var(--space-6) calc(20px + var(--safe-right)) 0 calc(20px + var(--safe-left));
+  padding: var(--space-4) 0 2px;
+  border-top: 2px solid var(--rule);
+}
+
+.appearance__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.appearance__title {
+  color: var(--text);
+}
+
+.appearance__summary {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.appearance__group {
+  margin-top: var(--space-4);
+}
+
+.appearance__label {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.appearance__options {
+  display: flex;
+  border: 1px solid var(--rule);
+}
+
+.appearance__option {
+  flex: 1;
+  min-height: 42px;
+  padding: 0 10px;
+  border-right: 1px solid var(--rule);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.appearance__option:last-child {
+  border-right: 0;
+}
+
+.appearance__option:active {
+  background: var(--surface-raised);
+}
+
+.appearance__option--active {
+  background: var(--surface-sunken);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  color: var(--text);
 }
 
 .rule {
