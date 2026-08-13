@@ -31,6 +31,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: "Projects", tab: "projects" },
   },
   {
+    path: "/active",
+    name: "active",
+    component: () => import("@/views/ActiveView.vue"),
+    meta: { title: "Active", tab: "active" },
+  },
+  {
     path: "/recent",
     name: "recent",
     component: () => import("@/views/RecentView.vue"),

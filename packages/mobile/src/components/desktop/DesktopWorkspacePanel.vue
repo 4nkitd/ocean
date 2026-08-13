@@ -9,6 +9,9 @@ import { basename, relativeTo } from "@/lib/format"
 import { formatChangeCounts } from "@/lib/diff"
 import { useFileTree } from "@/stores/files"
 import { useGit } from "@/stores/git"
+import { useActiveSessions } from "@/stores/active"
+import { encodePathParam } from "@/router"
+import { useRouter } from "vue-router"
 
 const props = defineProps<{
   directory: string
@@ -19,10 +22,25 @@ const emit = defineEmits<{
   openFile: [string]
   openDiff: [string]
   openCommit: [GitCommit]
-  openGit: []
 }>()
 
-const activePanel = ref<"files" | "git" | "mcp">("git")
+const activePanel = ref<"files" | "git" | "mcp" | "active">("git")
+const router = useRouter()
+/**
+ * Every agent running on this server, not just this project's — the desktop
+ * has the room to keep them in view the way a chat app keeps its member list.
+ */
+const {
+  rows: activeRows,
+  elapsed: activeElapsed,
+  reload: reloadActive,
+  loading: activeLoading,
+} = useActiveSessions()
+
+function openActive(directory: string, sessionId: string): void {
+  if (!directory) return
+  void router.push(`/p/${encodePathParam(directory)}/session/${sessionId}`)
+}
 const gitTab = ref<"changes" | "history">("changes")
 const fileTree = useFileTree(props.directory)
 const git = useGit(props.directory)
@@ -97,10 +115,11 @@ onMounted(() => {
           :class="{ 'workspace__tab--active': activePanel === 'files' }"
           :aria-selected="activePanel === 'files'"
           role="tab"
+          title="Files"
+          aria-label="Files"
           @click="activePanel = 'files'"
         >
-          <AppIcon name="folder" :size="14" />
-          <span>Files</span>
+          <AppIcon name="folder" :size="15" />
         </button>
         <button
           type="button"
@@ -109,10 +128,11 @@ onMounted(() => {
           :aria-selected="activePanel === 'git'"
           role="tab"
           :disabled="!isRepo"
+          title="Git"
+          aria-label="Git"
           @click="activePanel = 'git'"
         >
-          <AppIcon name="git-branch" :size="14" />
-          <span>Git</span>
+          <AppIcon name="git-branch" :size="15" />
           <span v-if="changedFiles.length" class="workspace__badge">{{ changedFiles.length }}</span>
         </button>
         <button
@@ -121,20 +141,26 @@ onMounted(() => {
           :class="{ 'workspace__tab--active': activePanel === 'mcp' }"
           :aria-selected="activePanel === 'mcp'"
           role="tab"
+          title="MCP servers"
+          aria-label="MCP servers"
           @click="activePanel = 'mcp'"
         >
-          <AppIcon name="gear" :size="14" />
-          <span>MCP</span>
+          <AppIcon name="mcp" :size="16" />
+        </button>
+        <button
+          type="button"
+          class="workspace__tab"
+          :class="{ 'workspace__tab--active': activePanel === 'active' }"
+          :aria-selected="activePanel === 'active'"
+          role="tab"
+          title="Active sessions"
+          aria-label="Active sessions"
+          @click="activePanel = 'active'"
+        >
+          <AppIcon name="spinner" :size="15" :class="{ 'workspace__spin': activeRows.length > 0 }" />
+          <span v-if="activeRows.length" class="workspace__badge">{{ activeRows.length }}</span>
         </button>
       </div>
-      <button
-        type="button"
-        class="workspace__open"
-        aria-label="Open full workspace"
-        @click="emit('openGit')"
-      >
-        <AppIcon name="arrow-right" :size="14" />
-      </button>
     </header>
 
     <template v-if="activePanel === 'files'">
@@ -279,8 +305,55 @@ onMounted(() => {
       </template>
     </template>
 
-    <div v-else class="scroll-y workspace__body">
+    <div v-else-if="activePanel === 'mcp'" class="scroll-y workspace__body">
       <McpList :directory="directory" />
+    </div>
+
+    <!-- Every agent on the server, the way a chat app keeps its member list:
+         always in view, and one click from the conversation it belongs to. -->
+    <div v-else class="workspace__active">
+      <div class="scroll-y workspace__body">
+        <p v-if="activeRows.length === 0" class="active__empty">Nothing is running right now.</p>
+        <button
+        v-for="row in activeRows"
+        :key="row.session.id"
+        type="button"
+        class="active__row"
+        :class="{ 'active__row--blocked': !!row.request }"
+        @click="openActive(row.directory, row.session.id)"
+      >
+        <AppIcon
+          :name="row.request ? 'alert' : 'spinner'"
+          :size="13"
+          class="active__mark"
+          :class="{ 'workspace__spin': !row.request }"
+        />
+        <span class="active__body">
+          <span class="active__title">{{ row.session.title || "Untitled session" }}</span>
+          <span class="active__meta">
+            <span class="active__project">{{ row.project }}</span>
+            <span v-if="row.request" class="active__ask">needs you</span>
+            <span v-else class="active__time">{{ activeElapsed(row) }}</span>
+          </span>
+        </span>
+        </button>
+      </div>
+
+      <!-- Pinned rather than in the header: it belongs to this list, and at the
+           bottom it is under the thumb instead of across the panel. -->
+      <button
+        type="button"
+        class="active__refresh"
+        :disabled="activeLoading"
+        @click="reloadActive"
+      >
+        <AppIcon
+          :name="activeLoading ? 'spinner' : 'refresh'"
+          :size="13"
+          :class="{ workspace__spin: activeLoading }"
+        />
+        <span>{{ activeLoading ? "Refreshing…" : "Refresh" }}</span>
+      </button>
     </div>
   </aside>
 </template>
@@ -310,17 +383,23 @@ onMounted(() => {
   border-bottom: 1px solid var(--rule);
 }
 
+/* Icons only: the labels cost more width than they earn in a panel this
+   narrow, and four evenly spread targets read as a toolbar rather than a
+   cramped list. The name lives on `title` and `aria-label`. */
 .workspace__tabs {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: stretch;
 }
 
 .workspace__tab {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 0 12px;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
   border-bottom: 2px solid transparent;
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -344,6 +423,7 @@ onMounted(() => {
 }
 
 .workspace__open {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -612,5 +692,111 @@ onMounted(() => {
   to {
     transform: rotate(360deg);
   }
+}
+
+.workspace__spin {
+  animation: spin 0.9s linear infinite;
+}
+
+.active__empty {
+  padding: 16px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.active__row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--rule-hair);
+  text-align: left;
+}
+
+.active__row:hover {
+  background: var(--surface-sunken);
+}
+
+.active__row--blocked {
+  border-left: 2px solid var(--accent);
+}
+
+.active__mark {
+  flex: none;
+  color: var(--accent);
+}
+
+.active__body {
+  flex: 1;
+  min-width: 0;
+  display: block;
+}
+
+.active__title {
+  display: block;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active__meta {
+  display: flex;
+  gap: 7px;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.active__project {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active__ask {
+  color: var(--accent);
+}
+
+.active__time {
+  color: var(--text-dim);
+}
+
+.workspace__active {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace__active .workspace__body {
+  flex: 1;
+  min-height: 0;
+}
+
+.active__refresh {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  border-top: 1px solid var(--rule);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.active__refresh:hover:not(:disabled) {
+  background: var(--surface-sunken);
+  color: var(--accent);
+}
+
+.active__refresh:disabled {
+  opacity: 0.6;
 }
 </style>

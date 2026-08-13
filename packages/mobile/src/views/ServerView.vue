@@ -20,6 +20,7 @@ const router = useRouter()
 
 const tabs: NavTab[] = [
   { id: "projects", label: "Projects", icon: "grid", to: "/projects" },
+  { id: "active", label: "Active", icon: "spinner", to: "/active" },
   { id: "recent", label: "Recent", icon: "chat", to: "/recent" },
   { id: "server", label: "Server", icon: "gear", to: "/server" },
 ]
