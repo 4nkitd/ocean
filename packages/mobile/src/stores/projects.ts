@@ -3,7 +3,7 @@ import type { OpenCodeClient } from "@/api/client"
 import { ApiError, toUserMessage } from "@/api/errors"
 import type { Project, ProjectSummary, ServerEvent, Session } from "@/api/types"
 import { basename, displayPath, initials } from "@/lib/format"
-import { connection, onServerEvent, requireClient } from "@/stores/connection"
+import { onServerEvent, requireClient } from "@/stores/connection"
 
 /**
  * The Projects screen's data.
@@ -81,16 +81,25 @@ export function useProjects() {
 
     try {
       const client = requireClient()
-      const list = await client.listProjects(current.signal)
-      const targets = list.length > 0 ? list : fallbackProjects()
+      // The stream only says a session went busy while this screen is mounted;
+      // the active list is what a session already mid-turn looks like on load.
+      const [list, statuses] = await Promise.all([
+        client.listProjects(current.signal),
+        client.getSessionStatuses(undefined, current.signal).catch(() => null),
+      ])
 
       // One failing project must not empty the screen, so each is settled on
       // its own and contributes whatever it managed to answer.
       const results = await Promise.all(
-        targets.map((project) => decorate(client, project, current.signal)),
+        list.map((project) => decorate(client, project, current.signal)),
       )
       if (current.signal.aborted) return
       loaded.value = results
+      runningSessions.value = new Set(
+        Object.entries(statuses ?? {})
+          .filter(([, status]) => status.type !== "idle")
+          .map(([id]) => id),
+      )
     } catch (cause) {
       if (current.signal.aborted || (cause instanceof ApiError && cause.kind === "aborted")) return
       error.value = toUserMessage(cause)
@@ -121,15 +130,48 @@ export function useProjects() {
     }
   }
 
+  /** The card whose project owns this directory — a worktree or one of its sandboxes. */
+  function projectAt(directory: string | undefined): LoadedProject | undefined {
+    if (!directory) return undefined
+    return loaded.value.find(
+      (project) =>
+        project.worktree === directory || (project.directories ?? []).includes(directory),
+    )
+  }
+
   function handleEvent(event: ServerEvent): void {
     const sessionId = sessionIdOf(event)
     if (!sessionId) return
 
-    const next = new Set(runningSessions.value)
-    if (event.type === "session.idle" || event.type === "session.error") next.delete(sessionId)
-    else if (event.type.startsWith("message.")) next.add(sessionId)
-    else return
+    // A session appearing or going away changes a card's count, and the whole
+    // list is too expensive to re-read for one row.
+    if (event.type === "session.created") {
+      if (readString(event.data, "parentID")) return
+      const project = projectAt(
+        event.directory ?? readString(event.data, "location", "directory") ?? undefined,
+      )
+      if (!project || project.sessionIds.includes(sessionId)) return
+      project.sessionIds = [...project.sessionIds, sessionId]
+      project.sessionCount += 1
+      project.lastActivity = Date.now()
+      return
+    }
 
+    if (event.type === "session.deleted") {
+      for (const project of loaded.value) {
+        if (!project.sessionIds.includes(sessionId)) continue
+        project.sessionIds = project.sessionIds.filter((id) => id !== sessionId)
+        project.sessionCount = Math.max(0, project.sessionCount - 1)
+      }
+      return
+    }
+
+    const busy = busyChange(event)
+    if (busy === null) return
+
+    const next = new Set(runningSessions.value)
+    if (busy) next.add(sessionId)
+    else next.delete(sessionId)
     runningSessions.value = next
   }
 
@@ -202,17 +244,6 @@ async function currentBranch(
  * servers rooted at a real directory — so the screen shows that directory
  * rather than claiming the machine has no projects.
  */
-function fallbackProjects(): Project[] {
-  const worktree = connection.workingDirectory.value
-  if (!worktree) return []
-  return [
-    {
-      id: `cwd:${worktree}`,
-      worktree,
-      vcs: connection.isGitRepo.value ? "git" : null,
-    },
-  ]
-}
 
 // ── ordering ───────────────────────────────────────────────────────────────
 
@@ -257,19 +288,33 @@ function sortByOrder(rows: ProjectRow[], order: string[]): ProjectRow[] {
 // ── events ─────────────────────────────────────────────────────────────────
 
 /**
- * Pull a session id out of whichever shape this build's event uses. Older
- * servers put it at the top level, newer ones nest it under the changed record,
- * and the payload itself has moved from `properties` to `data`.
+ * Pull a session id out of a v2 event. The client already lifts `sessionID`
+ * from `data` at parse time, so events can be filtered on it directly.
  */
 export function sessionIdOf(event: ServerEvent): string | null {
-  const properties = (event.data ?? event.properties ?? {}) as Record<string, unknown>
-  return (
-    readString(properties, "sessionID") ??
-    readString(properties, "sessionId") ??
-    readString(properties, "part", "sessionID") ??
-    readString(properties, "info", "sessionID") ??
-    (event.type.startsWith("session.") ? readString(properties, "info", "id") : null)
+  return event.sessionID ?? readString(event.data, "sessionID")
+}
+
+/**
+ * Which events move a session between running and idle. `null` means the event
+ * says nothing about running state.
+ */
+function busyChange(event: ServerEvent): boolean | null {
+  if (event.type === "session.execution.started" || event.type === "session.step.started")
+    return true
+  if (
+    event.type === "session.idle" ||
+    event.type === "session.execution.succeeded" ||
+    event.type === "session.execution.failed" ||
+    event.type === "session.execution.interrupted"
   )
+    return false
+  if (event.type === "session.status") {
+    const status = readString(event.data, "status", "type")
+    if (status === "busy" || status === "retry") return true
+    if (status === "idle") return false
+  }
+  return null
 }
 
 /** Read a nested string without asserting a shape the server may not send. */

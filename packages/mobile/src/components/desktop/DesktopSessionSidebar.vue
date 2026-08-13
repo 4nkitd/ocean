@@ -49,17 +49,17 @@ function handleEvent(event: ServerEvent): void {
   if (!id) return
   const session = sessions.value.find((candidate) => candidate.id === id)
 
-  if (event.type === "session.deleted" || event.type === "session.removed") {
+  if (event.type === "session.deleted") {
     sessions.value = sessions.value.filter((candidate) => candidate.id !== id)
     return
   }
 
-  if (event.type === "session.updated") {
-    const title = readString(event.data ?? event.properties, "info", "title")
+  if (event.type === "session.renamed") {
+    const title = readString(event.data, "title")
+    const parentID = readString(event.data, "parentID")
     // Checked before the refetch below, not after: `listSessions` filters these
-    // out, so an unfiltered internal session would never be found and every one
+    // out, so an unfiltered subagent session would never be found and every one
     // of its events would kick off another full reload.
-    const parentID = readString(event.data ?? event.properties, "info", "parentID")
     if (isHiddenSession({ id, title, parentID })) return
     if (session) {
       if (title) session.title = title
@@ -70,22 +70,25 @@ function handleEvent(event: ServerEvent): void {
     return
   }
   if (event.type === "session.status") {
-    const props = (event.data ?? event.properties ?? {}) as Record<string, unknown>
-    const status =
-      typeof props.status === "string" ? props.status : readString(props.status, "type")
+    const status = readString(event.data, "status", "type")
     const next = new Set(running.value)
     if (status === "busy" || status === "retry") next.add(id)
     else if (status === "idle") next.delete(id)
     running.value = next
     return
   }
-  if (event.type === "session.idle" || event.type === "session.error") {
+  if (
+    event.type === "session.idle" ||
+    event.type === "session.execution.succeeded" ||
+    event.type === "session.execution.failed" ||
+    event.type === "session.execution.interrupted"
+  ) {
     const next = new Set(running.value)
     next.delete(id)
     running.value = next
     return
   }
-  if (event.type.startsWith("message.")) {
+  if (event.type.startsWith("session.") && event.type !== "session.renamed") {
     const next = new Set(running.value)
     next.add(id)
     running.value = next

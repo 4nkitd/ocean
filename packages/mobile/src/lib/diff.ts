@@ -1,9 +1,9 @@
 /**
  * Unified-diff parsing.
  *
- * Patches reach the client from two unrelated places — `/file/content` answers
- * with `{ type: "patch" }` on some builds, and `git diff` comes back through
- * the command endpoint — so the parsing lives here rather than inside a view.
+ * Patches reach the client from two unrelated places — `GET /api/vcs/diff`
+ * for working-tree changes, and `git show` through the server's shell endpoint
+ * for a commit's files — so the parsing lives here rather than inside a view.
  *
  * The one hard rule: this never throws. A patch the parser cannot make sense of
  * produces an empty hunk list, which the Diff screen renders as "no changes in

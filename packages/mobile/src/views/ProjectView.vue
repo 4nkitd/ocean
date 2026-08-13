@@ -150,20 +150,19 @@ function handleEvent(event: ServerEvent): void {
   const id = sessionIdOf(event)
   if (!id) return
   const row = sessions.value.find((session) => session.id === id)
-  const props = (event.data ?? event.properties ?? {}) as Record<string, unknown>
 
-  if (event.type === "session.deleted" || event.type === "session.removed") {
+  if (event.type === "session.deleted") {
     const at = sessions.value.findIndex((session) => session.id === id)
     if (at !== -1) sessions.value.splice(at, 1)
     return
   }
 
-  if (event.type === "session.updated") {
-    const title = readString(props, "info", "title")
-    // Our own plumbing sessions and subagent children announce themselves like
-    // any other; without this they would appear here and never leave, since a
-    // row added by an event is not re-checked against the server's list.
-    if (isHiddenSession({ id, title, parentID: readString(props, "info", "parentID") })) return
+  if (event.type === "session.renamed") {
+    const title = readString(event.data, "title")
+    // Subagent children announce themselves like any other session; without
+    // this they would appear here and never leave, since a row added by an
+    // event is not re-checked against the server's list.
+    if (isHiddenSession({ id, title, parentID: readString(event.data, "parentID") })) return
     if (row) {
       if (title) row.title = title
       row.updated = Date.now()
@@ -185,42 +184,46 @@ function handleEvent(event: ServerEvent): void {
 
   if (!row) return
 
-  if (event.type === "session.idle" || event.type === "session.error") {
+  if (
+    event.type === "session.idle" ||
+    event.type === "session.execution.succeeded" ||
+    event.type === "session.execution.failed" ||
+    event.type === "session.execution.interrupted"
+  ) {
     row.running = false
     row.permission = null
     return
   }
 
   /**
-   * The permission block is driven entirely by `permission.updated`; there is
+   * The permission block is driven entirely by `permission.asked`; there is
    * no endpoint that lists outstanding requests, so a session whose request
    * arrived before this screen mounted simply shows no block rather than a
    * guessed one.
    */
-  if (event.type.startsWith("permission.")) {
-    row.permission =
-      event.type === "permission.replied" ? null : { detail: permissionDetail(event) }
+  if (event.type === "permission.asked") {
+    row.permission = { detail: permissionDetail(event) }
+    return
+  }
+  if (event.type === "permission.replied") {
+    row.permission = null
     return
   }
 
-  if (event.type.startsWith("message.")) {
+  if (event.type.startsWith("session.") || event.type.startsWith("message.")) {
     row.running = true
     row.updated = Date.now()
   }
 }
 
 function permissionDetail(event: ServerEvent): string {
-  const properties = (event.data ?? event.properties ?? {}) as Record<string, unknown>
-  const kind =
-    readString(properties, "info", "type") ??
-    readString(properties, "type") ??
-    readString(properties, "info", "permission")
-  const path =
-    readString(properties, "info", "metadata", "filePath") ??
-    readString(properties, "metadata", "filePath") ??
-    readString(properties, "info", "metadata", "path")
-  const title = readString(properties, "info", "title") ?? readString(properties, "title")
-  const parts = [kind, path ? basename(path) : null].filter((part): part is string => Boolean(part))
+  const data = event.data
+  const kind = readString(data, "action")
+  const resources = Array.isArray(data.resources) ? data.resources : []
+  const resource =
+    resources.find((entry): entry is string => typeof entry === "string") ?? null
+  const title = readString(data, "metadata", "title")
+  const parts = [kind, resource ? basename(resource) : null].filter((part): part is string => Boolean(part))
   return parts.length > 0 ? parts.join(" · ") : (title ?? "Awaiting your approval")
 }
 

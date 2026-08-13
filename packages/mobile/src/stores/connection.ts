@@ -142,6 +142,13 @@ export async function connect(credentials: ServerCredentials): Promise<boolean> 
         authFailed.value = true
         throw cause
       }
+      if (cause instanceof ApiError && cause.kind === "notfound") {
+        // Something answered, it just wasn't the v2 API — a v1 server, a web
+        // UI, or a proxy in front of neither.
+        setStep("reach", "ok", `${Math.round(performance.now() - startedAt)}ms`)
+        setStep("auth", "failed", "no v2 API")
+        throw cause
+      }
       setStep("reach", "failed", null)
       setStep("auth", "pending")
       throw cause
@@ -149,15 +156,14 @@ export async function connect(credentials: ServerCredentials): Promise<boolean> 
 
     const latency = Math.round(performance.now() - startedAt)
     setStep("reach", "ok", `${latency}ms`)
-    setStep("auth", "ok", credentials.useBasicAuth ? "200" : "not required")
+    setStep("auth", "ok", "200")
     appInfo.value = info
 
-    // 3: version — informational, and absent on every build we support (there
-    // is no version endpoint), so it reads straight from the handshake info.
+    // 3: version — `GET /api/health` reports it, so this is a real answer.
     setStep("version", "running")
     const version = info.version ?? null
     serverVersion.value = version
-    setStep("version", version ? "ok" : "skipped", version ? "ok" : "unknown")
+    setStep("version", version ? "ok" : "skipped", version ?? "not reported")
 
     // 4: repository detection decides whether the Git tab is live.
     setStep("repo", "running")

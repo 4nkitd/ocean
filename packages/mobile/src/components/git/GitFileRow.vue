@@ -3,8 +3,7 @@
  * One changed file in the status list.
  *
  * The status letter is the row's whole colour signal: an addition takes the
- * accent, a modification and a deletion the lighter --accent-500 step, and an
- * untracked file stays muted because it is not part of the change set yet.
+ * accent, a modification and a deletion the lighter --accent-500 step.
  * The letter is decorative for a screen reader — the same information is in the
  * visually hidden label, so the row announces "modified, router.ts" rather than
  * "M".
@@ -28,23 +27,18 @@ const name = computed(() => basename(relative.value))
 /** The design labels a top-level file "root" rather than leaving the line blank. */
 const directory = computed(() => dirname(relative.value) || "root")
 
-const untracked = computed(() => props.file.status === "untracked")
-
 const letter = computed(() => {
   switch (props.file.status) {
     case "added":
       return "A"
     case "deleted":
       return "D"
-    case "untracked":
-      return "U"
     default:
       return "M"
   }
 })
 
 const counts = computed(() => {
-  if (untracked.value) return ""
   // A file that is new to the index has nothing on the removed side to report.
   if (props.file.status === "added") return formatChangeCounts(props.file.added, null)
   return formatChangeCounts(props.file.added, props.file.removed)
@@ -57,8 +51,8 @@ const counts = computed(() => {
     <span class="sr-only">{{ file.status }}</span>
     <TypeBadge :filename="name" />
     <span class="row__body">
-      <span class="row__name" :class="{ 'row__name--muted': untracked }">{{ name }}</span>
-      <span v-if="directory !== 'root' || !untracked" class="row__dir">{{ directory }}</span>
+      <span class="row__name">{{ name }}</span>
+      <span v-if="directory !== 'root'" class="row__dir">{{ directory }}</span>
     </span>
     <span v-if="counts" class="row__counts">{{ counts }}</span>
   </button>
@@ -95,10 +89,6 @@ const counts = computed(() => {
   color: var(--accent-500);
 }
 
-.row__letter--untracked {
-  color: var(--text-muted);
-}
-
 .row__body {
   flex: 1;
   min-width: 0;
@@ -113,10 +103,6 @@ const counts = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.row__name--muted {
-  color: var(--text-muted);
 }
 
 .row__dir {

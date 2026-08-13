@@ -25,7 +25,6 @@ const language = computed(() => languageFor(name.value))
 const binary = computed(() => isBinary(name.value))
 
 const content = ref("")
-const isPatch = ref(false)
 const loading = ref(true)
 const error = ref<string | null>(null)
 const gitStatus = ref<FileChangeStatus | null>(null)
@@ -48,7 +47,6 @@ async function load(): Promise<void> {
   try {
     const result = await requireClient().readFile(props.path, props.directory, controller.signal)
     content.value = result.content
-    isPatch.value = result.type === "patch"
     selectedLine.value = 1
   } catch (cause) {
     if (cause instanceof ApiError && cause.kind === "aborted") return
@@ -73,7 +71,7 @@ async function loadGitState(): Promise<void> {
 
 async function loadChangedLines(): Promise<void> {
   try {
-    const changes = await requireClient().getVcsDiff(props.directory, "git", controller.signal)
+    const changes = await requireClient().getVcsDiff(props.directory, "working", controller.signal)
     const match = changes.find(
       (entry) =>
         relativeTo(props.directory, entry.file) === relativeTo(props.directory, props.path),
@@ -157,7 +155,7 @@ onUnmounted(() => controller.abort())
       <CodeViewer
         v-else
         :content="content"
-        :language="isPatch ? 'text' : language"
+        :language="language"
         :changed-lines="changedLines"
         :selected-line="selectedLine"
         @select="selectedLine = $event"

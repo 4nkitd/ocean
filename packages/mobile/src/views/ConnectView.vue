@@ -26,6 +26,13 @@ import { beginHandshake, lastAttempt } from "./HandshakeView.vue"
 const route = useRoute()
 const router = useRouter()
 
+/**
+ * v2's CORS allowlist is `http://localhost:*`, `http://127.0.0.1:*` and
+ * `*.opencode.ai`, with no way to widen it. Served from anywhere else, the
+ * browser is refused before the request leaves, so the relay is the default.
+ */
+const localOrigin = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/i.test(location.hostname)
+
 const recents = computed(() => connection.recents.value)
 const connecting = computed(() => connection.status.value === "connecting")
 const authFailed = computed(() => connection.authFailed.value)
@@ -53,9 +60,10 @@ const initial =
   seedFrom(recents.value.find((entry) => entry.url === route.query.server) ?? recents.value[0])
 
 const url = ref(initial?.url ?? "")
-const useBasicAuth = ref(initial?.useBasicAuth ?? false)
-const username = ref(initial?.username ?? "")
-const useProxy = ref(initial?.proxy ?? false)
+// v2 has no unauthenticated mode, and `opencode` is the only username it takes.
+const useBasicAuth = ref(initial?.useBasicAuth ?? true)
+const username = ref(initial?.username || "opencode")
+const useProxy = ref(initial?.proxy ?? !localOrigin)
 const remember = ref(initial?.remember ?? true)
 // A rejected password is not offered back — the user is here to change it.
 const password = ref(connection.authFailed.value ? "" : (initial?.password ?? ""))
@@ -113,8 +121,8 @@ function applyRecent(entry: Readonly<RecentServer>): void {
   const stored = savedServer(entry.url)
   url.value = entry.url
   useBasicAuth.value = stored?.useBasicAuth ?? entry.useBasicAuth
-  username.value = stored?.username ?? entry.username ?? ""
-  useProxy.value = stored?.proxy ?? entry.proxy ?? false
+  username.value = stored?.username || entry.username || "opencode"
+  useProxy.value = stored?.proxy ?? entry.proxy ?? !localOrigin
   remember.value = stored !== null
   // A remembered server brings its password back; anything else needs one typed.
   password.value = stored?.password ?? ""
@@ -173,7 +181,11 @@ function metaFor(entry: Readonly<RecentServer>): string {
         <AppToggle
           v-model="useBasicAuth"
           label="Basic auth"
-          :description="useBasicAuth ? 'Send credentials with every request' : 'Off'"
+          :description="
+            useBasicAuth
+              ? 'Sent with every request — every v2 server requires it'
+              : 'Off — the server will reject every request'
+          "
         />
 
         <AppToggle
@@ -193,8 +205,10 @@ function metaFor(entry: Readonly<RecentServer>): string {
           label="Route through this app's relay"
           :description="
             useProxy
-              ? 'Requests go via the same-origin proxy — use when the server strips CORS headers'
-              : 'Off — call the server directly'
+              ? 'Requests go through this app, so the server sees them as same-origin'
+              : localOrigin
+                ? 'Off — the browser calls the server directly'
+                : 'Off — the server refuses browser calls from this domain, so this will fail'
           "
         />
 
@@ -204,6 +218,7 @@ function metaFor(entry: Readonly<RecentServer>): string {
             class="form__username"
             label="Username"
             autocomplete="username"
+            hint="opencode — the only username a v2 server accepts."
             :invalid="!!credentialError"
           />
 
@@ -214,6 +229,7 @@ function metaFor(entry: Readonly<RecentServer>): string {
             label="Password"
             :type="revealPassword ? 'text' : 'password'"
             autocomplete="current-password"
+            hint="OPENCODE_PASSWORD, or the password the server prints when it starts."
             :invalid="!!credentialError"
             :error="credentialError ?? undefined"
           >
@@ -232,10 +248,10 @@ function metaFor(entry: Readonly<RecentServer>): string {
         </template>
 
         <div v-else class="callout">
-          <div class="label callout__kicker callout__kicker--warn">Unauthenticated</div>
+          <div class="label callout__kicker callout__kicker--warn">Auth required</div>
           <p class="callout__body">
-            Anyone who can reach this address can read your files. Prefer auth, or bind the server
-            to localhost and tunnel.
+            There is no unauthenticated opencode server. Without a password every request comes
+            back 401.
           </p>
         </div>
 

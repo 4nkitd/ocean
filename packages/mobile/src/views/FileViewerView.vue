@@ -32,7 +32,6 @@ const language = computed(() => languageFor(name.value))
 const binary = computed(() => isBinary(name.value))
 
 const content = ref("")
-const isPatch = ref(false)
 const loading = ref(true)
 const error = ref<string | null>(null)
 const gitStatus = ref<FileChangeStatus | null>(null)
@@ -59,8 +58,6 @@ const statusLabel = computed(() => {
       return "added"
     case "deleted":
       return "deleted"
-    case "untracked":
-      return "untracked"
     default:
       return "unchanged"
   }
@@ -72,7 +69,6 @@ async function load() {
   try {
     const result = await requireClient().readFile(path, directory, controller.signal)
     content.value = result.content
-    isPatch.value = result.type === "patch"
     selectedLine.value = 1
   } catch (cause) {
     if (cause instanceof ApiError && cause.kind === "aborted") return
@@ -103,7 +99,7 @@ async function loadGitState() {
  */
 async function loadChangedLines() {
   try {
-    const changes = await requireClient().getVcsDiff(directory, "git", controller.signal)
+    const changes = await requireClient().getVcsDiff(directory, "working", controller.signal)
     const match = changes.find((entry) => relativeTo(directory, entry.file) === relativeTo(directory, path))
     if (!match?.patch) return
     changedLines.value = parseHunkLines(match.patch)
@@ -253,7 +249,6 @@ function revealInTree() {
       <div class="chips">
         <span class="chip">{{ language }}</span>
         <span v-if="!loading && !binary" class="chip">{{ formatBytes(byteSize) }}</span>
-        <span v-if="isPatch" class="chip">patch</span>
         <span class="chip chip--accent">read only</span>
       </div>
     </header>
@@ -281,7 +276,7 @@ function revealInTree() {
       <CodeViewer
         v-else
         :content="content"
-        :language="isPatch ? 'text' : language"
+        :language="language"
         :changed-lines="changedLines"
         :selected-line="selectedLine"
         @select="selectedLine = $event"

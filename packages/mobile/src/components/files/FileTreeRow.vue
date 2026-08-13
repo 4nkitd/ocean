@@ -49,8 +49,6 @@ const marker = computed(() => {
       return { text: "A", tone: "changed" }
     case "deleted":
       return { text: "D", tone: "changed" }
-    case "untracked":
-      return { text: "U", tone: "new" }
     default:
       return null
   }

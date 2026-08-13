@@ -92,12 +92,43 @@ const SHELL_TOOLS = new Set(["bash", "shell", "run", "command", "terminal"])
 
 function commandOf(part: Part): string | null {
   const state = part.state
-  if (!state || state.status === "pending") return null
+  if (!state || state.status === "pending" || state.status === "streaming") return null
   const command = state.input?.command
   return typeof command === "string" && command ? command : null
 }
 
 const isUser = computed(() => props.message.info.role === "user")
+
+/** A system note — the server announcing something it did outside a turn. */
+const isSystem = computed(() => props.message.info.role === "system")
+
+const systemLabel = computed(() => {
+  switch (props.message.info.kind) {
+    case "skill":
+      return "Skill activated"
+    case "compaction":
+      return "Compaction"
+    case "agent-switched":
+      return "Agent switched"
+    case "model-switched":
+      return "Model switched"
+    case "location-switched":
+      return "Location switched"
+    case "shell":
+      return "Shell"
+    default:
+      return "Note"
+  }
+})
+
+const systemText = computed(() => {
+  const text = props.message.parts
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text!.trim())
+    .filter(Boolean)
+    .join("\n")
+  return text || null
+})
 
 /** The user's prompt, which is plain text — markdown is an assistant affordance. */
 const userText = computed(() => {
@@ -143,8 +174,6 @@ const items = computed<Item[]>(() => {
       result.push({ key: part.id, kind: "reasoning", text: part.text, running: turnActive.value })
       continue
     }
-    // `step-*`, `snapshot` and `patch` parts are bookkeeping the transcript has
-    // no place for; dropping them is intentional.
   }
   return result
 })
@@ -167,7 +196,14 @@ const awaitingOutput = computed(
       {{ isUser ? "You" : "opencode" }}
     </div>
 
-    <template v-if="isUser">
+    <template v-if="isSystem">
+      <p class="turn__note">
+        <span class="turn__note-label">{{ systemLabel }}</span>
+        <template v-if="systemText"> — {{ systemText }}</template>
+      </p>
+    </template>
+
+    <template v-else-if="isUser">
       <ul v-if="images.length" class="shots">
         <li v-for="image in images" :key="image.id" class="shots__item">
           <img :src="image.url" :alt="image.filename ?? 'Attached image'" loading="lazy" />
@@ -250,6 +286,24 @@ const awaitingOutput = computed(
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--text-muted);
+}
+
+.turn__note {
+  display: block;
+  max-width: 92%;
+  padding: 8px 12px;
+  border: 1px solid var(--rule);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.turn__note-label {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
 }
 
 .turn__label--accent {

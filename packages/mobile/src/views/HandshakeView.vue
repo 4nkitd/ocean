@@ -38,8 +38,8 @@ const steps = computed(() => connection.steps)
 const status = computed(() => connection.status.value)
 const error = computed(() => connection.error.value)
 const workingDirectory = computed(() => connection.workingDirectory.value)
-const serverVersion = computed(() => connection.serverVersion.value)
 const isGitRepo = computed(() => connection.isGitRepo.value)
+const authFailed = computed(() => connection.authFailed.value)
 
 const busy = computed(() => status.value === "connecting")
 const failed = computed(() => status.value === "error")
@@ -107,12 +107,15 @@ function textFor(step: Readonly<HandshakeStep>): string {
       if (step.state === "failed") return "Could not reach server"
       return step.label
     case "auth":
-      if (step.state === "ok") return asUser.value ? "Authenticated as" : "No credentials required"
+      if (step.state === "ok") return asUser.value ? "Authenticated as" : "Authenticated"
       if (step.state === "running") return "Authenticating…"
-      if (step.state === "failed") return "Credentials rejected"
+      // The same step covers "the password was wrong" and "there is no v2 API
+      // at this address" — only the first is a credential problem.
+      if (step.state === "failed")
+        return authFailed.value ? "Credentials rejected" : "No v2 API here"
       return step.label
     case "version":
-      if (step.state === "ok") return "Version"
+      if (step.state === "ok") return "Server version"
       if (step.state === "running") return "Reading version…"
       if (step.state === "skipped") return "Version not reported"
       return step.label
@@ -123,11 +126,10 @@ function textFor(step: Readonly<HandshakeStep>): string {
   }
 }
 
-/** The mono fragment the design sets inside the label: the user, the version. */
+/** The mono fragment the design sets inside the label: the user it signed in as. */
 function emphasisFor(step: Readonly<HandshakeStep>): string | null {
   if (step.state !== "ok") return null
   if (step.id === "auth") return asUser.value
-  if (step.id === "version") return serverVersion.value
   return null
 }
 </script>

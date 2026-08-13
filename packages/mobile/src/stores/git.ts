@@ -155,24 +155,14 @@ export function useGit(directory: string) {
 
   /**
    * The server's diff is the whole tree in one response; the one file we want
-   * is picked out and parsed. A build without `/vcs/diff` falls back to the
-   * patch flavour of `/file/content`.
+   * is picked out and parsed.
    */
   async function readPatch(path: string): Promise<string> {
-    try {
-      const changes = await requireClient().getVcsDiff(directory, "git", signal)
-      const match = changes.find(
-        (entry) => relativeTo(directory, entry.file) === relativeTo(directory, path),
-      )
-      if (match?.patch.trim()) return match.patch
-    } catch (error) {
-      if (isAborted(error)) throw error
-      // A build without the endpoint: fall through to /file/content.
-    }
-
-    const content = await requireClient().readFile(path, directory, signal)
-    if (content.type === "patch" && content.content.trim()) return content.content
-    return ""
+    const changes = await requireClient().getVcsDiff(directory, "working", signal)
+    const match = changes.find(
+      (entry) => relativeTo(directory, entry.file) === relativeTo(directory, path),
+    )
+    return match?.patch ?? ""
   }
 
   // ── mutations ───────────────────────────────────────────────────────────
@@ -212,10 +202,10 @@ export function useGit(directory: string) {
   // ── live refresh ────────────────────────────────────────────────────────
 
   // The agent edits files while this screen is open; without this the status
-  // list silently goes stale behind a running session. Not every server build
-  // emits `file.*` events on the stream, so a finished turn, a session update,
-  // or any vcs event is treated as "the tree may have changed", and a periodic
-  // poll catches changes made outside sessions entirely.
+  // list silently goes stale behind a running session. `filesystem.changed`
+  // only fires for writes the server itself made, so a finished turn or a vcs
+  // event is also treated as "the tree may have changed", and a periodic poll
+  // catches edits made outside the server entirely.
   let pending: ReturnType<typeof setTimeout> | null = null
   const schedule = () => {
     if (pending) clearTimeout(pending)
@@ -225,16 +215,18 @@ export function useGit(directory: string) {
     }, 500)
   }
 
+  // The v2 stream is global, so an event from another directory is not ours.
   const stopListening = onServerEvent((event) => {
+    if (event.directory && !samePath(event.directory, directory)) return
     if (
-      event.type.startsWith("file.") ||
+      event.type === "filesystem.changed" ||
       event.type.startsWith("vcs.") ||
-      event.type.startsWith("message.")
+      event.type === "session.idle" ||
+      event.type === "session.step.ended" ||
+      event.type === "session.execution.succeeded"
     ) {
       schedule()
-      return
     }
-    if (event.type === "session.idle" || event.type === "session.updated") schedule()
   })
 
   const pollTimer = setInterval(() => {
@@ -283,11 +275,11 @@ export interface GitStatus {
 
 // ── failure copy ──────────────────────────────────────────────────────────
 
-/** The commit endpoint's answer is a sentence, not stderr — restate it. */
+/** What comes back is git's own line; restate the ones worth restating. */
 function explainCommitFailure(text: string): string {
   const lower = text.toLowerCase()
   if (lower.includes("nothing to commit") || lower.includes("no changes added")) {
-    return "Nothing is staged, so there is nothing to commit."
+    return "The working tree is clean, so there is nothing to commit."
   }
   if (
     lower.includes("please tell me who you are") ||
@@ -335,6 +327,12 @@ function explainPushFailure(text: string): string {
 
 function isAborted(error: unknown): boolean {
   return error instanceof ApiError && error.kind === "aborted"
+}
+
+/** macOS resolves /tmp to /private/tmp, so the two spellings must compare equal. */
+function samePath(left: string, right: string): boolean {
+  const strip = (value: string) => value.replace(/^\/private(?=\/)/, "").replace(/\/+$/, "")
+  return strip(left) === strip(right)
 }
 
 /** Re-exported so callers don't need the type import twice. */

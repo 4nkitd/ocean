@@ -8,7 +8,7 @@
 export type ApiErrorKind =
   | "network" // DNS failure, refused connection, TLS problem, CORS block
   | "auth" // 401/403 — credentials missing or rejected
-  | "notfound" // 404 — endpoint absent on this server build
+  | "notfound" // 404, or a web UI where the v2 API should be
   | "server" // 5xx
   | "timeout"
   | "aborted" // caller cancelled; not shown to the user
@@ -39,9 +39,9 @@ export class ApiError extends Error {
       case "network":
         return "Could not reach the server. Check the address, and that `opencode serve` is still running."
       case "auth":
-        return "The server rejected these credentials."
+        return "Wrong or missing password. Every v2 server needs one — the username is always `opencode`."
       case "notfound":
-        return "This server build does not offer that endpoint."
+        return "Nothing answers the v2 API there. Check the address, or turn the relay on if this app is not on localhost."
       case "server":
         return `The server returned an error${this.status ? ` (${this.status})` : ""}.`
       case "timeout":

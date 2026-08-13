@@ -1,4 +1,5 @@
 import { computed, onUnmounted, ref, toValue, watch, type MaybeRefOrGetter } from "vue"
+import { toolOutput } from "@/api/client"
 import { isApiError, toUserMessage } from "@/api/errors"
 import type {
   MessageInfo,
@@ -7,17 +8,24 @@ import type {
   Part,
   PromptAttachment,
   ServerEvent,
+  TokenUsage,
 } from "@/api/types"
 import { onServerEvent, requireClient } from "@/stores/connection"
 
 /**
  * One chat session: its history, the live stream that grows it, and sending.
  *
- * A session is fed by two transports at once — the POST that starts a turn may
- * return before the assistant is finished, while the SSE stream delivers the
- * message and its parts as they are produced. Neither is authoritative and
- * neither is ordered relative to the other, so everything here is an *upsert
- * keyed on the server's id* rather than an append. See `DEDUPE` below.
+ * v2 admits a prompt and answers nothing — every token, tool call and error
+ * arrives on the SSE stream as a granular event. So the transcript is built
+ * twice over: `listMessages` gives the canonical history, and the stream grows
+ * the turn in flight. The two meet on ids, which is why parts are keyed exactly
+ * the way `toMessage` keys them — `<messageID>:<ordinal>` for text and
+ * reasoning, `<messageID>:tool:<callID>` for tools. A part the stream created
+ * and a part the history returned are then the same part.
+ *
+ * The one thing the stream never announces is the user's own message: v2
+ * persists it and moves on. So the optimistic bubble stays local until a
+ * refetch (on `session.execution.started`) hands back the server's copy.
  */
 
 /** Where an optimistic user turn is in its journey to the server. */
@@ -33,22 +41,7 @@ export interface SessionMessage extends MessageWithParts {
   draftAttachments: PromptAttachment[]
 }
 
-/**
- * DEDUPE
- *
- * Every message and every part carries an id the server minted, and both the
- * POST response and the event stream repeat those same ids — the stream re-sends
- * a growing text part under its original id rather than emitting deltas. So
- * writing by id can never duplicate: whichever transport arrives last simply
- * wins for that id, and arrival order stops mattering.
- *
- * The one id we mint ourselves is the optimistic user turn's, prefixed
- * `local:`. It is adopted by the first user message the server announces while
- * that turn is in flight, and any `local:` part on a message is dropped the
- * moment a real server part lands on it — the placeholder's text and the
- * server's text are the same content under two ids, and only id-keyed writes
- * would otherwise leave both.
- */
+/** Ids we mint ourselves — the optimistic turn and the local system notes. */
 const LOCAL_PREFIX = "local:"
 
 function isLocalId(id: string): boolean {
@@ -64,8 +57,10 @@ export function useSession(
   const error = ref<string | null>(null)
   /** A prompt POST is in flight. */
   const sending = ref(false)
-  /** The server is producing a turn — set by us on send, cleared by the stream. */
+  /** The server is producing a turn — driven entirely by the stream. */
   const busy = ref(false)
+  /** What the server is doing when that is more than "busy" — a retry, say. */
+  const statusNote = ref<string | null>(null)
   const activeAssistantId = ref<string | null>(null)
 
   /** The agent this session runs under, for the composer's selector. */
@@ -74,22 +69,16 @@ export function useSession(
   /** The model (and variant) this session runs under, for the composer. */
   const model = ref<ModelRef | null>(null)
 
-  /**
-   * Parts can arrive before the message that owns them; the stream makes no
-   * ordering promise across event types. They wait here rather than being
-   * dropped or inventing a message shell we'd have to guess the role of.
-   */
-  const orphanParts = new Map<string, Part[]>()
-  const orphanDeltas = new Map<string, Map<string, string>>()
-
   let controller = new AbortController()
   let promptController: AbortController | null = null
   let localCounter = 0
   let loadToken = 0
+  let syncing = false
+  let compactionNoteId: string | null = null
 
   const isStreaming = computed(() => sending.value || busy.value)
 
-  // ── reading ──────────────────────────────────────────────────────────────
+  // ── transcript ───────────────────────────────────────────────────────────
 
   function adopt(message: MessageWithParts): SessionMessage {
     return {
@@ -104,6 +93,11 @@ export function useSession(
 
   function indexOfMessage(id: string): number {
     return messages.value.findIndex((message) => message.info.id === id)
+  }
+
+  function findMessage(id: string): SessionMessage | undefined {
+    const at = indexOfMessage(id)
+    return at === -1 ? undefined : messages.value[at]!
   }
 
   function mergeInfo(previous: MessageInfo, next: MessageInfo): MessageInfo {
@@ -133,39 +127,6 @@ export function useSession(
     return merged
   }
 
-  function updateAssistantActivity(info: MessageInfo): void {
-    if (!info.time.completed) {
-      activeAssistantId.value = info.id
-      busy.value = true
-      return
-    }
-    if (activeAssistantId.value !== info.id) return
-    activeAssistantId.value = null
-    if (
-      !sending.value &&
-      !messages.value.some(
-        (message) => message.info.role === "assistant" && !message.info.time.completed,
-      )
-    ) {
-      busy.value = false
-    }
-  }
-
-  function applySessionStatus(statusType: string | undefined): void {
-    if (statusType === "busy" || statusType === "retry") {
-      const pending = [...messages.value]
-        .reverse()
-        .find((message) => message.info.role === "assistant" && !message.info.time.completed)
-      activeAssistantId.value = pending?.info.id ?? activeAssistantId.value
-      busy.value = true
-    } else if (statusType === "idle") {
-      activeAssistantId.value = null
-      busy.value = false
-    } else if (!activeAssistantId.value && !sending.value) {
-      busy.value = false
-    }
-  }
-
   function messageText(message: MessageWithParts): string {
     return message.parts
       .filter((part) => part.type === "text" && typeof part.text === "string")
@@ -179,7 +140,10 @@ export function useSession(
       (message) => !isLocalId(message.info.id) && message.info.role === "user",
     )
     for (const local of messages.value.filter(
-      (message) => isLocalId(message.info.id) && message.delivery !== "failed",
+      (message) =>
+        isLocalId(message.info.id) &&
+        message.info.role === "user" &&
+        message.delivery !== "failed",
     )) {
       const draft = local.draft?.trim() ?? ""
       // An images-only turn has no text to match on, so the attachment count
@@ -199,27 +163,14 @@ export function useSession(
 
   function mergeHistory(history: MessageWithParts[]): void {
     for (const message of history) {
-      upsertInfo(message.info, false)
+      // The turn streaming right now is more current than the copy the server
+      // just handed back — its parts are still growing here.
+      if (message.info.id === activeAssistantId.value) continue
+      upsertInfo(message.info)
       for (const part of message.parts ?? []) upsertPart(part)
     }
     reconcileOptimistic()
     messages.value.sort((left, right) => left.info.time.created - right.info.time.created)
-  }
-
-  function drainOrphans(messageId: string): void {
-    const waiting = orphanParts.get(messageId)
-    if (waiting) {
-      orphanParts.delete(messageId)
-      for (const part of waiting) upsertPart(part)
-    }
-
-    const deltas = orphanDeltas.get(messageId)
-    if (deltas) {
-      orphanDeltas.delete(messageId)
-      for (const [partId, delta] of deltas) {
-        if (!appendDelta(messageId, partId, delta)) queueDelta(messageId, partId, delta)
-      }
-    }
   }
 
   /** Insert by creation time so a message that arrives late still lands in order. */
@@ -228,211 +179,475 @@ export function useSession(
     const at = messages.value.findIndex((existing) => existing.info.time.created > created)
     if (at === -1) messages.value.push(message)
     else messages.value.splice(at, 0, message)
-
-    drainOrphans(message.info.id)
   }
 
-  function upsertInfo(info: MessageInfo, live = true): void {
-    const at = indexOfMessage(info.id)
-    if (at !== -1) {
-      const message = messages.value[at]!
-      message.info = mergeInfo(message.info, info)
-      if (live && message.info.role === "assistant") updateAssistantActivity(message.info)
+  function upsertInfo(info: MessageInfo): void {
+    const existing = findMessage(info.id)
+    if (existing) {
+      existing.info = mergeInfo(existing.info, info)
       return
     }
 
-    // The server announcing a user message while our optimistic one is still in
-    // flight *is* that message — adopt the real id rather than showing both.
+    // The server's copy of a user message we are still holding optimistically
+    // *is* that message — adopt the real id rather than showing both.
     if (info.role === "user") {
       const optimistic = messages.value.find(
-        (message) => isLocalId(message.info.id) && message.delivery !== "failed",
+        (message) =>
+          isLocalId(message.info.id) &&
+          message.info.role === "user" &&
+          message.delivery !== "failed",
       )
       if (optimistic) {
         optimistic.info = info
         optimistic.delivery = "sent"
-        drainOrphans(info.id)
         return
       }
     }
 
-    if (live && info.role === "assistant") updateAssistantActivity(info)
     insertMessage(adopt({ info, parts: [] }))
   }
 
   function upsertPart(part: Part): void {
-    const at = indexOfMessage(part.messageID)
-    if (at === -1) {
-      const queue = orphanParts.get(part.messageID) ?? []
-      const existing = queue.findIndex((queued) => queued.id === part.id)
-      if (existing === -1) queue.push(part)
-      else queue[existing] = mergePart(queue[existing]!, part)
-      orphanParts.set(part.messageID, queue)
-      return
-    }
+    const message = findMessage(part.messageID)
+    if (!message) return
 
-    const message = messages.value[at]!
     if (!isLocalId(part.id) && message.parts.some((existing) => isLocalId(existing.id))) {
       message.parts = message.parts.filter((existing) => !isLocalId(existing.id))
     }
 
-    const partAt = message.parts.findIndex((existing) => existing.id === part.id)
-    if (partAt === -1) {
-      message.parts.push(withQueuedDelta(part))
-      return
-    }
-
-    const previous = message.parts[partAt]!
-    message.parts[partAt] = withQueuedDelta(mergePart(previous, part))
-  }
-
-  /** False when the part being grown is not on screen yet — caller decides. */
-  function appendDelta(messageId: string, partId: string, delta: string): boolean {
-    const at = indexOfMessage(messageId)
-    if (at === -1) return false
-    const part = messages.value[at]!.parts.find((existing) => existing.id === partId)
-    if (!part) return false
-    part.text = `${part.text ?? ""}${delta}`
-    return true
-  }
-
-  function queueDelta(messageId: string, partId: string, delta: string): void {
-    const parts = orphanDeltas.get(messageId) ?? new Map<string, string>()
-    parts.set(partId, `${parts.get(partId) ?? ""}${delta}`)
-    orphanDeltas.set(messageId, parts)
-  }
-
-  function withQueuedDelta(part: Part): Part {
-    const pending = orphanDeltas.get(part.messageID)?.get(part.id)
-    if (pending === undefined) return part
-    const parts = orphanDeltas.get(part.messageID)!
-    parts.delete(part.id)
-    if (parts.size === 0) orphanDeltas.delete(part.messageID)
-    return part.text === undefined ? { ...part, text: pending } : part
+    const at = message.parts.findIndex((existing) => existing.id === part.id)
+    if (at === -1) message.parts.push(part)
+    else message.parts[at] = mergePart(message.parts[at]!, part)
   }
 
   function removeMessage(id: string): void {
     const at = indexOfMessage(id)
     if (at !== -1) messages.value.splice(at, 1)
-    orphanParts.delete(id)
-    orphanDeltas.delete(id)
   }
 
-  function removePart(messageId: string, partId: string): void {
-    const at = indexOfMessage(messageId)
-    if (at === -1) return
-    const message = messages.value[at]!
-    message.parts = message.parts.filter((part) => part.id !== partId)
+  // ── stream targets ───────────────────────────────────────────────────────
+
+  /**
+   * The assistant message a step is producing. `session.step.started` is the
+   * only announcement of it, so this both creates and patches.
+   */
+  function ensureAssistant(id: string, patch?: Partial<MessageInfo>): SessionMessage {
+    const existing = findMessage(id)
+    if (existing) {
+      if (patch) existing.info = { ...existing.info, ...patch }
+      return existing
+    }
+    const message = adopt({
+      info: {
+        id,
+        sessionID: toValue(sessionId),
+        role: "assistant",
+        kind: "assistant",
+        time: { created: Date.now() },
+        ...patch,
+      },
+      parts: [],
+    })
+    messages.value.push(message)
+    return message
+  }
+
+  /** Text and reasoning are addressed by their ordinal inside the message. */
+  function textPart(
+    data: Record<string, unknown>,
+    type: "text" | "reasoning",
+  ): Part | undefined {
+    const messageID = str(data.assistantMessageID)
+    const ordinal = num(data.ordinal)
+    if (!messageID || ordinal === null) return undefined
+
+    const message = ensureAssistant(messageID)
+    const id = `${messageID}:${ordinal}`
+    const existing = message.parts.find((part) => part.id === id)
+    if (existing) return existing
+
+    const part: Part = {
+      id,
+      messageID,
+      sessionID: message.info.sessionID,
+      type,
+      ordinal,
+      text: "",
+      synthetic: true,
+    }
+    message.parts.push(part)
+    return message.parts[message.parts.length - 1]
+  }
+
+  /** Tool calls are addressed by their call id, which is stable across events. */
+  function toolPart(data: Record<string, unknown>): Part | undefined {
+    const callID = str(data.id)
+    if (!callID) return undefined
+    const messageID = str(data.assistantMessageID)
+    if (!messageID) {
+      for (const message of messages.value) {
+        const found = message.parts.find(
+          (part) => part.type === "tool" && part.callID === callID,
+        )
+        if (found) return found
+      }
+      return undefined
+    }
+
+    const message = ensureAssistant(messageID)
+    const id = `${messageID}:tool:${callID}`
+    const existing = message.parts.find((part) => part.id === id)
+    if (existing) {
+      const name = str(data.name)
+      if (name && !existing.tool) existing.tool = name
+      return existing
+    }
+
+    const part: Part = {
+      id,
+      messageID,
+      sessionID: message.info.sessionID,
+      type: "tool",
+      tool: str(data.name) ?? undefined,
+      callID,
+      ordinal: message.parts.length,
+      state: { status: "pending" },
+    }
+    message.parts.push(part)
+    return message.parts[message.parts.length - 1]
+  }
+
+  /** The input the call was made with, carried forward as the state advances. */
+  function toolInput(part: Part): Record<string, unknown> | undefined {
+    const state = part.state
+    if (!state || state.status === "pending" || state.status === "streaming") return undefined
+    return state.input
+  }
+
+  function toolTitle(part: Part): string | undefined {
+    const state = part.state
+    if (!state || state.status === "pending") return undefined
+    return state.title
+  }
+
+  function toolStart(part: Part): number {
+    const state = part.state
+    if (!state || state.status === "pending") return Date.now()
+    return state.time?.start ?? Date.now()
+  }
+
+  /** A note in the transcript for something the server did outside a turn. */
+  function pushNote(kind: string, text: string): string {
+    const id = `${LOCAL_PREFIX}${kind}:${localCounter++}`
+    const sid = toValue(sessionId)
+    insertMessage(
+      adopt({
+        info: { id, sessionID: sid, role: "system", kind, time: { created: Date.now() } },
+        parts: [{ id: `${id}:text`, messageID: id, sessionID: sid, type: "text", text }],
+      }),
+    )
+    return id
+  }
+
+  function compactionNote(text: string, final: boolean): void {
+    const existing = compactionNoteId ? findMessage(compactionNoteId) : undefined
+    if (existing) {
+      const part = existing.parts[0]
+      if (part) part.text = text
+      if (final) compactionNoteId = null
+      return
+    }
+    const id = pushNote("compaction", text)
+    compactionNoteId = final ? null : id
+  }
+
+  function failActive(message: string): void {
+    const active = activeAssistantId.value ? findMessage(activeAssistantId.value) : undefined
+    if (active) {
+      active.info = { ...active.info, error: { name: "Session error", data: { message } } }
+      return
+    }
+    pushNote("error", message)
+  }
+
+  function settle(): void {
+    busy.value = false
+    statusNote.value = null
+    activeAssistantId.value = null
+    // A prompt whose server copy never arrived leaves the local echo behind.
+    if (
+      messages.value.some(
+        (message) =>
+          isLocalId(message.info.id) &&
+          message.info.role === "user" &&
+          message.delivery === "sent",
+      )
+    )
+      void sync()
   }
 
   // ── server events ────────────────────────────────────────────────────────
 
-  /** Event payloads have moved between builds; read defensively, not by version. */
-  function readInfo(
-    props: Record<string, unknown>,
-    eventSessionID: string | null,
-  ): MessageInfo | null {
-    const candidate = (props.info ?? props.message ?? props) as Partial<MessageInfo>
-    if (!candidate || typeof candidate.id !== "string" || typeof candidate.role !== "string")
-      return null
-    if (!candidate.time) return null
-    const sessionID = candidate.sessionID ?? eventSessionID
-    if (!sessionID) return null
-    return { ...candidate, sessionID } as MessageInfo
-  }
-
-  function readPart(props: Record<string, unknown>, eventSessionID: string | null): Part | null {
-    const candidate = (props.part ?? props) as Partial<Part>
-    if (!candidate || typeof candidate.id !== "string" || typeof candidate.messageID !== "string")
-      return null
-    const sessionID = candidate.sessionID ?? eventSessionID
-    if (!sessionID) return null
-    return { ...candidate, sessionID } as Part
-  }
-
   function handleEvent(event: ServerEvent): void {
+    if (event.type === "stream.reconnected") {
+      void load()
+      return
+    }
+
     const sid = toValue(sessionId)
-    const props = (event.data ?? event.properties ?? {}) as Record<string, unknown>
-    const eventSessionID =
-      event.sessionID ?? stringValue(props.sessionID) ?? stringValue(props.sessionId)
+    if (!sid || event.sessionID !== sid) return
+    const data = event.data ?? {}
 
     switch (event.type) {
-      case "message.updated":
-      case "message.created": {
-        const info = readInfo(props, eventSessionID)
-        if (!info || info.sessionID !== sid) return
-        upsertInfo(info)
+      case "session.step.started": {
+        const id = str(data.assistantMessageID)
+        if (!id) return
+        const ref = record(data.model)
+        ensureAssistant(id, {
+          agent: str(data.agent) ?? undefined,
+          modelID: str(ref?.id) ?? str(ref?.modelID) ?? undefined,
+          providerID: str(ref?.providerID) ?? undefined,
+          variant: str(ref?.variant) ?? undefined,
+        })
+        activeAssistantId.value = id
+        busy.value = true
         return
       }
-      case "message.part.updated":
-      case "message.part.created": {
-        const part = readPart(props, eventSessionID)
+
+      case "session.step.ended": {
+        const id = str(data.assistantMessageID)
+        if (!id) return
+        const message = ensureAssistant(id)
+        message.info = {
+          ...message.info,
+          time: { ...message.info.time, completed: Date.now() },
+          cost: num(data.cost) ?? message.info.cost,
+          tokens: tokensOf(data.tokens) ?? message.info.tokens,
+          finish: str(data.finish) ?? message.info.finish,
+        }
+        if (activeAssistantId.value === id) activeAssistantId.value = null
+        return
+      }
+
+      case "session.step.failed": {
+        const id = str(data.assistantMessageID)
+        if (!id) return
+        const failure = record(data.error)
+        const message = ensureAssistant(id)
+        message.info = {
+          ...message.info,
+          time: { ...message.info.time, completed: Date.now() },
+          cost: num(data.cost) ?? message.info.cost,
+          tokens: tokensOf(data.tokens) ?? message.info.tokens,
+          error: {
+            name: str(failure?.name) ?? "Turn failed",
+            data: { message: str(failure?.message) ?? "The model turn failed." },
+          },
+        }
+        if (activeAssistantId.value === id) activeAssistantId.value = null
+        return
+      }
+
+      case "session.text.started":
+      case "session.reasoning.started": {
+        const part = textPart(data, event.type === "session.text.started" ? "text" : "reasoning")
         if (!part) return
-        if (part.sessionID ? part.sessionID !== sid : indexOfMessage(part.messageID) === -1) return
-        const delta = typeof props.delta === "string" ? props.delta : ""
-        if (part.text === undefined && delta) {
-          if (!appendDelta(part.messageID, part.id, delta)) upsertPart({ ...part, text: delta })
-        } else {
-          upsertPart(part)
+        part.text = ""
+        part.synthetic = true
+        return
+      }
+
+      case "session.text.delta":
+      case "session.reasoning.delta": {
+        const delta = str(data.delta)
+        if (!delta) return
+        const part = textPart(data, event.type === "session.text.delta" ? "text" : "reasoning")
+        if (!part) return
+        part.text = `${part.text ?? ""}${delta}`
+        return
+      }
+
+      case "session.text.ended":
+      case "session.reasoning.ended": {
+        const part = textPart(data, event.type === "session.text.ended" ? "text" : "reasoning")
+        if (!part) return
+        if (typeof data.text === "string") part.text = data.text
+        part.synthetic = false
+        return
+      }
+
+      case "session.tool.input.started": {
+        const part = toolPart(data)
+        if (!part) return
+        part.state = { status: "streaming", inputText: "" }
+        return
+      }
+
+      case "session.tool.input.delta": {
+        const delta = str(data.delta)
+        if (!delta) return
+        const part = toolPart(data)
+        if (!part) return
+        const previous =
+          part.state?.status === "streaming" ? (part.state.inputText ?? "") : ""
+        part.state = { status: "streaming", inputText: `${previous}${delta}` }
+        return
+      }
+
+      case "session.tool.input.ended": {
+        const part = toolPart(data)
+        if (!part) return
+        const text =
+          typeof data.text === "string"
+            ? data.text
+            : part.state?.status === "streaming"
+              ? (part.state.inputText ?? "")
+              : ""
+        part.state = { status: "streaming", inputText: text }
+        return
+      }
+
+      case "session.tool.called": {
+        const part = toolPart(data)
+        if (!part) return
+        part.state = {
+          status: "running",
+          title: toolTitle(part),
+          input: record(data.input) ?? undefined,
+          time: { start: Date.now() },
         }
         return
       }
-      case "message.part.delta": {
-        const messageID = stringValue(props.messageID)
-        const partID =
-          stringValue(props.partID) ?? stringValue(props.partId) ?? stringValue(props.id)
-        const delta = typeof props.delta === "string" ? props.delta : ""
-        if (!messageID || !partID || !delta || (eventSessionID && eventSessionID !== sid)) return
-        if (!appendDelta(messageID, partID, delta)) queueDelta(messageID, partID, delta)
+
+      case "session.tool.progress": {
+        const part = toolPart(data)
+        if (!part) return
+        const metadata = record(data.metadata)
+        part.state = {
+          status: "running",
+          title: str(metadata?.title) ?? toolTitle(part),
+          input: toolInput(part),
+          time: { start: toolStart(part) },
+        }
         return
       }
-      case "message.part.removed": {
-        const messageId = props.messageID
-        const partId = props.partID ?? props.id
-        if (eventSessionID && eventSessionID !== sid) return
-        if (typeof messageId === "string" && typeof partId === "string")
-          removePart(messageId, partId)
+
+      case "session.tool.success": {
+        const part = toolPart(data)
+        if (!part) return
+        const metadata = record(data.metadata)
+        part.state = {
+          status: "completed",
+          title: str(metadata?.title) ?? toolTitle(part),
+          input: toolInput(part),
+          output: toolOutput(data.content),
+          metadata: metadata ?? undefined,
+          time: { start: toolStart(part), end: Date.now() },
+        }
         return
       }
-      case "message.removed": {
-        const messageId = props.messageID ?? props.id
-        if (eventSessionID && eventSessionID !== sid) return
-        if (typeof messageId === "string") removeMessage(messageId)
+
+      case "session.tool.failed": {
+        const part = toolPart(data)
+        if (!part) return
+        const metadata = record(data.metadata)
+        part.state = {
+          status: "error",
+          error: str(record(data.error)?.message) ?? "The tool failed",
+          title: str(metadata?.title) ?? toolTitle(part),
+          input: toolInput(part),
+          metadata: metadata ?? undefined,
+          time: { start: toolStart(part), end: Date.now() },
+        }
         return
       }
+
+      case "session.execution.started": {
+        busy.value = true
+        statusNote.value = null
+        // v2 never announces the user's own message; this is where the server's
+        // copy replaces the optimistic bubble.
+        void sync()
+        return
+      }
+
+      case "session.execution.succeeded":
+      case "session.execution.interrupted":
+      case "session.idle": {
+        settle()
+        return
+      }
+
+      case "session.execution.failed": {
+        failActive(str(record(data.error)?.message) ?? "The turn failed.")
+        settle()
+        return
+      }
+
       case "session.status": {
-        if (!eventSessionID || eventSessionID !== sid) return
-        const status = props.status
-        const statusType =
-          typeof status === "string"
-            ? status
-            : stringValue((status as Record<string, unknown>)?.type)
-        applySessionStatus(statusType ?? undefined)
-        return
-      }
-      case "session.idle":
-      case "session.error": {
-        if (!eventSessionID || eventSessionID !== sid) return
-        if (event.type === "session.error") {
-          const message = stringValue(props.message) ?? stringValue(props.error)
-          if (message && activeAssistantId.value) {
-            const active = messages.value.find((item) => item.info.id === activeAssistantId.value)
-            if (active) active.info.error = { name: "Session error", data: { message } }
-          }
+        const status = record(data.status)
+        const type = str(status?.type)
+        if (type === "busy") {
+          busy.value = true
+          statusNote.value = null
+        } else if (type === "retry") {
+          busy.value = true
+          const attempt = num(status?.attempt)
+          const reason = str(status?.message) ?? "retrying"
+          statusNote.value = attempt ? `${reason} (attempt ${attempt})` : reason
+        } else if (type === "idle") {
+          settle()
         }
-        busy.value = false
-        activeAssistantId.value = null
         return
       }
-      case "stream.reconnected": {
-        void load()
+
+      case "session.retry.scheduled": {
+        busy.value = true
+        const attempt = num(data.attempt)
+        const reason = str(record(data.error)?.message) ?? "the turn failed"
+        statusNote.value = attempt ? `retrying (attempt ${attempt}) — ${reason}` : `retrying — ${reason}`
         return
       }
+
+      case "session.renamed": {
+        title.value = str(data.title)
+        return
+      }
+
+      case "session.agent.selected": {
+        agent.value = str(data.agent)
+        return
+      }
+
+      case "session.model.selected": {
+        const ref = record(data.model)
+        const modelID = str(ref?.id) ?? str(ref?.modelID)
+        const providerID = str(ref?.providerID)
+        if (modelID && providerID)
+          model.value = { providerID, modelID, variant: str(ref?.variant) ?? undefined }
+        return
+      }
+
+      case "session.compaction.started": {
+        compactionNote("Compacting the conversation…", false)
+        return
+      }
+
+      case "session.compaction.ended": {
+        compactionNote("Conversation compacted.", true)
+        return
+      }
+
+      case "session.compaction.failed": {
+        compactionNote(
+          `Compaction failed — ${str(record(data.error)?.message) ?? "unknown error"}`,
+          true,
+        )
+        return
+      }
+
       default:
     }
-  }
-
-  function stringValue(value: unknown): string | null {
-    return typeof value === "string" && value ? value : null
   }
 
   // ── loading ──────────────────────────────────────────────────────────────
@@ -457,30 +672,40 @@ export function useSession(
       mergeHistory(history)
       title.value = detail?.title?.trim() || null
       if (detail?.agent) agent.value = detail.agent
-      if (detail?.model && typeof detail.model === "object") {
-        const m = detail.model as Record<string, unknown>
-        const modelID =
-          typeof m.id === "string" ? m.id : typeof m.modelID === "string" ? m.modelID : null
-        const providerID =
-          typeof m.providerID === "string"
-            ? m.providerID
-            : typeof m.provider === "string"
-              ? m.provider
-              : null
-        if (modelID && providerID) {
-          model.value = {
-            providerID,
-            modelID,
-            variant: typeof m.variant === "string" ? m.variant : undefined,
-          }
-        }
+      const modelID = detail?.model?.modelID ?? detail?.model?.id
+      const providerID = detail?.model?.providerID ?? detail?.model?.provider
+      if (modelID && providerID) {
+        model.value = { providerID, modelID, variant: detail?.model?.variant }
       }
-      applySessionStatus(statuses?.[sid]?.type)
+      const status = statuses?.[sid]?.type
+      busy.value = status === "busy" || status === "retry"
     } catch (cause) {
       if (token !== loadToken || (isApiError(cause) && cause.kind === "aborted")) return
       error.value = toUserMessage(cause)
     } finally {
       if (token === loadToken) loading.value = false
+    }
+  }
+
+  /** Refresh the history without touching the loading state or the transcript. */
+  async function sync(): Promise<void> {
+    const sid = toValue(sessionId)
+    if (!sid || syncing) return
+    syncing = true
+    const requestController = controller
+    try {
+      const history = await requireClient().listMessages(
+        sid,
+        toValue(directory),
+        requestController.signal,
+      )
+      if (toValue(sessionId) !== sid || requestController.signal.aborted) return
+      mergeHistory(history)
+    } catch {
+      // The transcript already holds its own copy of the turn; a refresh that
+      // failed is not worth a banner.
+    } finally {
+      syncing = false
     }
   }
 
@@ -502,7 +727,8 @@ export function useSession(
     busy.value = true
 
     try {
-      const reply = await requireClient().sendPrompt(sid, message.draft ?? "", {
+      // The prompt is only *admitted* here — the turn arrives on the stream.
+      await requireClient().sendPrompt(sid, message.draft ?? "", {
         directory: toValue(directory),
         providerID: model.value?.providerID,
         modelID: model.value?.modelID,
@@ -512,18 +738,13 @@ export function useSession(
         signal: requestController.signal,
       })
       message.delivery = "sent"
-      // The reply is the finished assistant turn. It is written through the same
-      // upserts as the stream, so whichever got here first is already covered.
-      if (reply?.info?.id) {
-        upsertInfo(reply.info)
-        for (const part of reply.parts ?? []) upsertPart(part)
-      }
     } catch (cause) {
       // Unmount aborts the request; the screen is gone, so there is nobody to
       // tell and no failed bubble worth keeping.
       if (isApiError(cause) && cause.kind === "aborted") return
       message.delivery = "failed"
       message.failure = toUserMessage(cause)
+      busy.value = false
     } finally {
       if (promptController === requestController) promptController = null
       sending.value = false
@@ -551,7 +772,7 @@ export function useSession(
       parts.push({ id: `${id}:text`, messageID: id, sessionID: sid, type: "text", text: body })
 
     const optimistic: SessionMessage = {
-      info: { id, sessionID: sid, role: "user", time: { created: Date.now() } },
+      info: { id, sessionID: sid, role: "user", kind: "user", time: { created: Date.now() } },
       parts,
       delivery: "sending",
       failure: null,
@@ -583,26 +804,39 @@ export function useSession(
       if (promptController === requestController) promptController = null
       sending.value = false
       busy.value = false
+      statusNote.value = null
       activeAssistantId.value = null
     }
   }
 
   /** Switch the session's agent; the next prompt runs under it. */
   async function setAgent(next: string): Promise<void> {
-    if (next === agent.value) return
+    const previous = agent.value
+    if (next === previous) return
     agent.value = next
-    await requireClient().switchAgent(toValue(sessionId), next, toValue(directory))
+    try {
+      await requireClient().switchAgent(toValue(sessionId), next)
+    } catch (cause) {
+      agent.value = previous
+      throw cause
+    }
   }
 
   /** Switch the session's model (and optional variant); the next prompt uses it. */
   async function setModel(next: ModelRef): Promise<void> {
+    const previous = model.value
     const same =
-      model.value?.providerID === next.providerID &&
-      model.value?.modelID === next.modelID &&
-      (model.value?.variant ?? null) === (next.variant ?? null)
+      previous?.providerID === next.providerID &&
+      previous?.modelID === next.modelID &&
+      (previous?.variant ?? null) === (next.variant ?? null)
     if (same) return
     model.value = next
-    await requireClient().switchModel(toValue(sessionId), next, toValue(directory))
+    try {
+      await requireClient().switchModel(toValue(sessionId), next)
+    } catch (cause) {
+      model.value = previous
+      throw cause
+    }
   }
 
   // ── lifecycle ────────────────────────────────────────────────────────────
@@ -618,15 +852,15 @@ export function useSession(
       promptController?.abort()
       promptController = null
       controller = new AbortController()
-      orphanParts.clear()
-      orphanDeltas.clear()
       messages.value = []
       title.value = null
       agent.value = null
       model.value = null
       sending.value = false
       busy.value = false
+      statusNote.value = null
       activeAssistantId.value = null
+      compactionNoteId = null
       void load()
     },
     { immediate: true },
@@ -644,6 +878,7 @@ export function useSession(
     error,
     sending,
     isStreaming,
+    statusNote,
     title,
     agent,
     model,
@@ -653,5 +888,33 @@ export function useSession(
     reload,
     setAgent,
     setModel,
+  }
+}
+
+// ── event payload readers ───────────────────────────────────────────────────
+
+function str(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null
+}
+
+function num(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null
+}
+
+function tokensOf(value: unknown): TokenUsage | undefined {
+  const raw = record(value)
+  if (!raw) return undefined
+  const cache = record(raw.cache)
+  return {
+    input: num(raw.input) ?? undefined,
+    output: num(raw.output) ?? undefined,
+    reasoning: num(raw.reasoning) ?? undefined,
+    cache: cache
+      ? { read: num(cache.read) ?? undefined, write: num(cache.write) ?? undefined }
+      : undefined,
   }
 }

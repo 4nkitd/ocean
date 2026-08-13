@@ -82,7 +82,6 @@ function back(): void {
 function letterFor(file: GitCommitFile): string {
   if (file.status === "added") return "A"
   if (file.status === "deleted") return "D"
-  if (file.status === "untracked") return "U"
   return "M"
 }
 

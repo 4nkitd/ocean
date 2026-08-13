@@ -1,19 +1,18 @@
 /**
- * Shapes returned by the opencode server's HTTP API.
+ * Shapes returned by the opencode v2 server's HTTP API (`/api/…`).
  *
- * These are hand-written rather than generated because the client targets a
- * range of server builds and has to tolerate fields that only newer ones send.
- * Anything not guaranteed across the versions we support is optional here, and
- * the client normalises it — screens should never branch on server version.
+ * These are hand-written rather than generated: the wire shapes are wider than
+ * what the screens need, so the client narrows them here once and every screen
+ * reads the same normalised types.
  */
 
 /**
- * Where the server is rooted and whether it is a repository.
+ * Where the server is rooted, what it is running, and whether it is a
+ * repository.
  *
- * Assembled by the client from `GET /path` and `GET /project/current`. There is
- * no `/app` endpoint — an early version of this client assumed one, and because
- * the server answers unknown paths with its web UI rather than a 404, the
- * mistake surfaced as a blank working directory rather than as an error.
+ * Assembled by the client from `GET /api/health`, `GET /api/location`,
+ * `GET /api/project/current` and `GET /api/config` — no single endpoint
+ * carries all of it.
  */
 export interface AppInfo {
   hostname?: string
@@ -33,14 +32,16 @@ export interface AppInfo {
   version?: string
 }
 
-/** `GET /project` — a directory the server knows about. */
+/** `GET /api/project` — a directory the server knows about. */
 export interface Project {
   id: string
-  /** Absolute path to the project directory. */
+  /** Absolute path to the project directory (v2 calls it `canonical`). */
   worktree: string
   /** Present when the directory is a git repository. */
   vcs?: "git" | null
   time?: { created?: number; initialized?: number }
+  /** Extra worktrees / sandboxes v2 associates with the project. */
+  directories?: string[]
 }
 
 /** A project decorated with everything the Projects screen renders. */
@@ -57,7 +58,7 @@ export interface ProjectSummary extends Project {
   lastActivity: number | null
 }
 
-/** `GET /session` — an agent conversation rooted at a directory. */
+/** `GET /api/session` — an agent conversation rooted at a directory. */
 export interface Session {
   id: string
   projectID?: string
@@ -66,9 +67,9 @@ export interface Session {
   title?: string
   version?: string
   time: { created: number; updated: number }
-  /** The agent this session runs under, on builds that report it. */
+  /** The agent this session runs under. */
   agent?: string
-  /** The model this session runs under, on builds that report it. */
+  /** The model this session runs under. */
   model?: {
     id?: string
     modelID?: string
@@ -76,43 +77,55 @@ export interface Session {
     provider?: string
     variant?: string
   }
-  /** Present while the assistant is producing a turn. */
+  cost?: number
+  tokens?: TokenUsage
+  /** Present when a revert is staged on the session. */
   revert?: unknown
 }
 
-export type MessageRole = "user" | "assistant"
+export interface TokenUsage {
+  input?: number
+  output?: number
+  reasoning?: number
+  cache?: { read?: number; write?: number }
+}
+
+/**
+ * `system` covers every v2 message type that is neither a user prompt nor an
+ * assistant turn — synthetic notes, skill activations, compactions and the
+ * agent / model / location switches the server records inline.
+ */
+export type MessageRole = "user" | "assistant" | "system"
 
 export interface MessageInfo {
   id: string
   sessionID: string
   role: MessageRole
+  /** The raw v2 message type, for screens that label system notes. */
+  kind?: string
   time: { created: number; completed?: number }
-  /** Assistant turns carry model and token accounting. */
+  /** Assistant turns carry the agent, model and token accounting. */
+  agent?: string
   modelID?: string
   providerID?: string
-  tokens?: {
-    input?: number
-    output?: number
-    reasoning?: number
-    cache?: { read?: number; write?: number }
-  }
+  variant?: string
+  tokens?: TokenUsage
   cost?: number
+  finish?: string
   error?: { name?: string; data?: { message?: string } }
 }
 
-export type PartType =
-  | "text"
-  | "reasoning"
-  | "tool"
-  | "file"
-  | "step-start"
-  | "step-finish"
-  | "snapshot"
-  | "patch"
-  | "agent"
+export type PartType = "text" | "reasoning" | "tool" | "file"
 
 export type ToolState =
   | { status: "pending" }
+  | {
+      status: "streaming"
+      title?: string
+      /** Partial JSON the model is still emitting. */
+      inputText?: string
+      time?: { start: number }
+    }
   | { status: "running"; title?: string; input?: Record<string, unknown>; time?: { start: number } }
   | {
       status: "completed"
@@ -125,7 +138,9 @@ export type ToolState =
   | {
       status: "error"
       error: string
+      title?: string
       input?: Record<string, unknown>
+      metadata?: Record<string, unknown>
       time?: { start: number; end: number }
     }
 
@@ -144,7 +159,9 @@ export interface Part {
   filename?: string
   mime?: string
   url?: string
-  /** Set on text parts the server streamed but has not finalised. */
+  /** Position of the part inside its message, which is how v2 keys deltas. */
+  ordinal?: number
+  /** Set on parts the server is still streaming. */
   synthetic?: boolean
 }
 
@@ -168,7 +185,7 @@ export interface MessageWithParts {
   parts: Part[]
 }
 
-/** `GET /file` — a directory listing entry or a read result. */
+/** One entry of a directory listing, with an absolute `path`. */
 export interface FileNode {
   name: string
   path: string
@@ -178,41 +195,24 @@ export interface FileNode {
   size?: number
 }
 
-/** `GET /api/fs/list` — one entry in the modern directory listing. */
-export interface FsEntry {
-  path: string
-  type: "file" | "directory"
-}
+/**
+ * What `GET /api/vcs/status` can say about a file. There is no untracked
+ * marker: a file git has never seen is reported as `added`, same as a staged
+ * new file, and no endpoint distinguishes the index from the worktree.
+ */
+export type FileChangeStatus = "added" | "modified" | "deleted"
 
-export type FileChangeStatus = "added" | "modified" | "deleted" | "untracked"
-
-/** `GET /file/content` — the body of one file. */
+/** `GET /api/fs/read/*` — the body of one file. */
 export interface FileContent {
-  /** `raw` for a clean file, `patch` when the server returns a diff instead. */
-  type: "raw" | "patch"
   content: string
 }
 
-/** `GET /file/status` — the working tree, as the server sees it. */
+/** The working tree, as `GET /api/vcs/status` sees it. Paths are repo-relative. */
 export interface FileStatus {
   path: string
   status: FileChangeStatus
   added?: number
   removed?: number
-  /** Present on servers that distinguish index from worktree. */
-  staged?: boolean
-}
-
-/** Everything the Git screens need, assembled by `GitService`. */
-export interface GitStatus {
-  isRepo: boolean
-  branch: string | null
-  upstream: string | null
-  ahead: number
-  behind: number
-  staged: FileStatus[]
-  changed: FileStatus[]
-  untracked: FileStatus[]
 }
 
 export interface GitCommit {
@@ -236,14 +236,6 @@ export interface GitCommitDetail extends GitCommit {
   files: GitCommitFile[]
 }
 
-export interface GitBranch {
-  name: string
-  current: boolean
-  remote: boolean
-  upstream: string | null
-  lastCommit: string | null
-}
-
 /** One `@@` block of a unified diff. */
 export interface DiffHunk {
   header: string
@@ -264,7 +256,10 @@ export interface FileDiff {
   removed: number
 }
 
-/** `GET /vcs` — branch, upstream and ahead/behind, in one call. */
+/**
+ * `GET /api/vcs` gives the branch; ahead/behind come from `git rev-list`
+ * through the shell endpoint, since v2 has no upstream-tracking route.
+ */
 export interface VcsInfo {
   branch?: string | null
   default_branch?: string | null
@@ -272,7 +267,7 @@ export interface VcsInfo {
   behind?: number
 }
 
-/** `GET /vcs/status` — one changed file, as the VCS service reports it. */
+/** `GET /api/vcs/status` — one changed file, as the VCS service reports it. */
 export interface VcsFileStatus {
   file: string
   additions: number
@@ -280,7 +275,7 @@ export interface VcsFileStatus {
   status: "added" | "deleted" | "modified"
 }
 
-/** `GET /vcs/diff` — one changed file and its unified-diff patch. */
+/** `GET /api/vcs/diff` — one changed file and its unified-diff patch. */
 export interface VcsDiffFile {
   file: string
   patch: string
@@ -289,37 +284,42 @@ export interface VcsDiffFile {
   status: "added" | "deleted" | "modified"
 }
 
-/** `POST /vcs/commit` — the server's answer to "did the commit land". */
+/** What the working tree is diffed against. */
+export type VcsDiffMode = "working" | "branch"
+
+/** The result of `git commit`, run through `POST /api/shell`. */
 export interface VcsCommitResult {
   committed: boolean
   hash?: string
   message?: string
 }
 
-/** `POST /vcs/push` — the server's answer to "did the push land". */
+/** The result of `git push`, run through `POST /api/shell`. */
 export interface VcsPushResult {
   pushed: boolean
   message?: string
 }
 
-/** `GET /event` — the server's SSE stream. */
+/** `POST /api/shell` — one command the server ran on our behalf. */
+export interface ShellResult {
+  output: string
+  exit: number | null
+  status: "running" | "exited" | "timeout" | "killed"
+}
+
+/** `GET /api/event` — one frame of the server's SSE stream. */
 export interface ServerEvent {
   type: string
   id?: string
+  /** From the event's `location`, so screens can ignore other directories. */
   directory?: string
   sessionID?: string
-  /**
-   * The event payload. Modern builds deliver it under `data` (with `sessionID`
-   * at the top level); older builds used `properties`. Consumers read both.
-   */
-  data?: Record<string, unknown>
-  properties?: Record<string, unknown>
+  data: Record<string, unknown>
 }
 
 /** `GET /api/agent` — one agent the session can run under. */
 export interface AgentInfo {
   id: string
-  /** Older builds call it `name` instead of `id`. */
   name?: string
   description?: string
   /** `primary` agents can be run directly; `subagent` cannot. */
@@ -342,9 +342,9 @@ export interface ModelInfo {
 /**
  * One MCP server the opencode process knows about.
  *
- * `GET /mcp` returns a map of name to status; this is that flattened, because
- * every screen wants a list. `failed` carries the reason — it is a server the
- * user meant to run, so the error is the whole story.
+ * `GET /api/mcp` returns `{name, status: {status}}` entries; this narrows them,
+ * because every screen wants a flat list. `failed` carries the reason — it is a
+ * server the user meant to run, so the error is the whole story.
  */
 export interface McpServer {
   name: string

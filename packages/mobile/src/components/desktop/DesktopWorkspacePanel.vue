@@ -66,12 +66,10 @@ function openDiff(file: FileStatus): void {
 function fileLetter(status: FileStatus["status"]): string {
   if (status === "added") return "A"
   if (status === "deleted") return "D"
-  if (status === "untracked") return "U"
   return "M"
 }
 
 function fileCounts(file: FileStatus): string {
-  if (file.status === "untracked") return ""
   if (file.status === "added") return formatChangeCounts(file.added, null)
   return formatChangeCounts(file.added, file.removed)
 }
@@ -83,8 +81,8 @@ function fileRelative(file: FileStatus): string {
 onMounted(() => {
   if (!props.isRepo) return
   void refreshStatus()
-  // Commit history is the expensive one — on a server without `/vcs/log` it
-  // falls back to a throwaway session, so it must not run for a plain folder.
+  // Commit history runs `git log` through the server's shell endpoint, so it
+  // must not run for a plain folder.
   void refreshCommits()
 })
 </script>

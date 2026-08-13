@@ -19,10 +19,13 @@ const emit = defineEmits<{ open: [path: string] }>()
 
 const status = computed<ToolState["status"]>(() => props.part.state?.status ?? "pending")
 
-/** `input` exists on every state but `pending`, where the call is not yet formed. */
+/**
+ * `input` exists on every settled state; `pending` and `streaming` have no
+ * formed call yet.
+ */
 const input = computed<Record<string, unknown>>(() => {
   const state = props.part.state
-  if (!state || state.status === "pending") return {}
+  if (!state || state.status === "pending" || state.status === "streaming") return {}
   return state.input ?? {}
 })
 
@@ -57,7 +60,8 @@ const title = computed(() => {
 
 const stateTitle = computed<string | null>(() => {
   const state = props.part.state
-  if (!state || state.status === "pending" || state.status === "error") return null
+  if (!state || state.status === "pending" || state.status === "streaming" || state.status === "error")
+    return null
   return state.title ?? null
 })
 
@@ -117,7 +121,7 @@ function activate(): void {
       </span>
 
       <AppIcon
-        v-if="status === 'running' || status === 'pending'"
+        v-if="status === 'running' || status === 'pending' || status === 'streaming'"
         name="spinner"
         :size="15"
         class="tool__spin"
