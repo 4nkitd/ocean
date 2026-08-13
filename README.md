@@ -1,6 +1,6 @@
 # ocean
 
-Mobile-first web client for a running `opencode serve` process.
+Mobile-first web client for a running `opencode serve` (v2) process.
 
 **Live: https://oc.4nkitd.in**
 
@@ -19,15 +19,17 @@ interface. Talks to the opencode server over its HTTP API and SSE event stream.
 
 ## Features
 
-- Connect to any reachable server (LAN or tunneled) with optional basic auth
-- Same-origin relay (`/proxy/…`) for servers behind reverse proxies that strip
-  CORS headers — no server-side changes needed
+- Connect to any reachable v2 server (LAN or tunneled) with its mandatory
+  basic auth — username `opencode`, password from `OPENCODE_PASSWORD`
+- Same-origin relay (`/proxy/…`), default-on when the app is not on localhost:
+  v2 only allows CORS from localhost and `*.opencode.ai`, so the relay is the
+  only way a deployed build can talk to a server
 - Projects / Recent / Server tabs with one-tap server switching
 - Session chat with live streaming: reasoning blocks, tool calls with
   expandable output, agent / model / variant selection
 - File tree with lazy loading, filter, and code viewer with changed-line tint
-- Git screens built on the server's first-class VCS API: status, diff, commit,
-  push — no shell endpoint required
+- Git screens: status, diff and commit history from the server's read-only VCS
+  API, with commit/push run as real `git` through the server's shell endpoint
 - Multi-server management, PWA manifest, dark Modernist design system
 
 ## Setup
@@ -43,12 +45,14 @@ setup for you.
 ```sh
 cd packages/mobile
 npm install
-npm run dev          # http://localhost:5273
+npm run dev          # http://localhost:5173
 npm run build        # typecheck + production build
 ```
 
-For screenshots and demos without touching a real server, run the mock:
+To exercise the app against a real v2 server, run `opencode serve` locally and
+connect with the relay off:
 
 ```sh
-node scripts/mock-server.mjs   # fake opencode server on 127.0.0.1:4599
+OPENCODE_PASSWORD=test123 opencode2 serve --hostname 127.0.0.1 --port 8080
+# connect from the app: http://127.0.0.1:8080, basic auth opencode:test123
 ```

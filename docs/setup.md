@@ -1,17 +1,18 @@
-# Setup: opencode server + Cloudflare tunnel
+# Setup: opencode v2 server + Cloudflare tunnel
 
 The mobile client is a static page; the machine it talks to needs a running
 `opencode serve` process reachable over the network. This guide sets up three
 pieces on a Linux machine (a VPS, a home server, anything with systemd):
 
-1. **opencode serve** as a systemd service — starts on boot, restarts on crash
-2. **Caddy** — optional basic-auth in front of the server (strongly recommended
-   when exposing it publicly)
+1. **opencode serve** (v2) as a systemd service — starts on boot, restarts on
+   crash, protects itself with HTTP basic auth
+2. **Caddy** — optional: a plain reverse proxy in front of the server (it must
+   NOT add its own basic auth; see step 3)
 3. **cloudflared** — a Cloudflare Tunnel that gives the server a public
    hostname without opening any port on your router or VPS firewall
 
-After this, the app connects to `https://<your-hostname>` (flip on the relay in
-the connect screen if you're using a proxy domain).
+After this, the app connects to `https://<your-hostname>` with the relay
+flipped on (see step 5 — with the deployed client it is already the default).
 
 ---
 
@@ -19,13 +20,20 @@ the connect screen if you're using a proxy domain).
 
 ```sh
 curl -fsSL https://opencode.ai/install | bash
-opencode serve --port 4100
+OPENCODE_PASSWORD="$(openssl rand -hex 16)" opencode serve --port 4100
 ```
 
-It should print `opencode server listening on http://127.0.0.1:4100`. Ctrl-C
-it — the next step runs it properly.
+It should print `server listening on http://127.0.0.1:4100` and a `server
+password`. Note the password — you will need it (pick a real one for the
+service below; don't actually run the server with the random one in the
+service). Ctrl-C it — the next step runs it properly.
 
 ## 2. Run it as a systemd service
+
+opencode v2 always requires basic auth. The username is always `opencode`; the
+password comes from the `OPENCODE_PASSWORD` environment variable, and if it is
+unset the server generates one and prints it at startup. Pin it in the service
+unit so it survives restarts:
 
 ```sh
 sudo tee /etc/systemd/system/opencode-serve.service > /dev/null <<'EOF'
@@ -35,6 +43,7 @@ After=network.target
 
 [Service]
 User=$USER
+Environment=OPENCODE_PASSWORD=<a-long-random-password>
 ExecStart=/home/$USER/.opencode/bin/opencode serve --port 4100
 Restart=always
 RestartSec=3
@@ -60,30 +69,23 @@ crashes; logs live in `journalctl -u opencode-serve -f`.
 > If your machine is not Linux (macOS, Windows), the equivalent is a launchd
 > plist or NSSM — same idea: `Restart` on failure, start at login.
 
-## 3. Basic auth with Caddy (recommended)
+## 3. Auth: let opencode do it (do NOT double-authenticate)
 
-Exposing the server to the internet without auth means anyone can read your
-files. Caddy is a tiny reverse proxy that puts a password in front:
+v2 has first-class HTTP basic auth: every `/api/…` request needs
+`Authorization: Basic`, username `opencode`, password `OPENCODE_PASSWORD`. It
+cannot be turned off.
 
-```sh
-sudo mkdir -p /etc/caddy /opt/opencode-mobile
-```
-
-Generate a password hash (you only need this once):
-
-```sh
-sudo apt install -y caddy   # or: brew install caddy
-caddy hash-password          # type your password, copy the bcrypt hash
-```
-
-Write the config, substituting your username and hash:
+If you put Caddy in front, do **not** add `basic_auth` to it. Caddy forwards
+the browser's `Authorization` header upstream untouched, so a Caddy basic-auth
+layer on top means the password must match at both hops — and the moment the
+two passwords drift, every request comes back 401. Let opencode's own auth be
+the only gate:
 
 ```sh
+sudo mkdir -p /etc/caddy
+
 sudo tee /etc/caddy/Caddyfile > /dev/null <<'EOF'
 :4410 {
-	basic_auth {
-		<username> $2a$14$<your-hash-here>
-	}
 	reverse_proxy 127.0.0.1:4100 {
 		header_up Host localhost:4100
 	}
@@ -91,12 +93,15 @@ sudo tee /etc/caddy/Caddyfile > /dev/null <<'EOF'
 EOF
 ```
 
-Run Caddy as a service too:
+(Caddy itself is optional — the tunnel can point straight at 4100. Keep it if
+you already run Caddy, or if you ever need request logging or rate limiting.)
+
+Run Caddy as a service:
 
 ```sh
 sudo tee /etc/systemd/system/caddy.service > /dev/null <<'EOF'
 [Unit]
-Description=caddy basic-auth proxy for opencode
+Description=caddy reverse proxy for opencode
 After=network.target
 
 [Service]
@@ -111,7 +116,7 @@ EOF
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now caddy
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4410/path
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4410/api/health
 # 401 = auth working. With credentials: 200.
 ```
 
@@ -178,8 +183,8 @@ sudo systemctl enable --now cloudflared
 Verify from anywhere:
 
 ```sh
-curl -u <username>:<password> -o /dev/null -w "%{http_code}\n" https://oc.<your-domain>/path
-# 200
+curl -u opencode:<password> -o /dev/null -w "%{http_code}\n" https://oc.<your-domain>/api/health
+# 200 — and 401 without credentials
 ```
 
 ## 5. Connect from the app
@@ -187,10 +192,17 @@ curl -u <username>:<password> -o /dev/null -w "%{http_code}\n" https://oc.<your-
 1. Open **https://oc.4nkitd.in** (the deployed client) or `npm run dev`
    locally.
 2. Server URL: `https://oc.<your-domain>`
-3. Basic auth: on, with the username/password from step 3.
-4. **Route through this app's relay: on** — the relay forwards requests
-   server-side, so the Caddy 401 on CORS preflights and any header stripping
-   by the tunnel never matter.
+3. Basic auth: on (the default), username `opencode`, password from step 2.
+4. **Route through this app's relay: keep it ON** (it is the default when the
+   app is served from anywhere but localhost). This is not optional for the
+   deployed client: v2 hard-codes its CORS allowlist to `http://localhost:*`,
+   `http://127.0.0.1:*` and `https://*.opencode.ai`, and there is no config
+   knob to widen it (the old v1 `server.cors` key is silently ignored). A
+   browser on a deployed domain is refused before the request leaves. The
+   relay forwards requests server-side, so everything becomes same-origin.
+   Chrome also blocks https→loopback/LAN requests with a Local Network Access
+   permission prompt, which is a second, independent reason the relay must be
+   on.
 5. Connect.
 
 ## 6. Keeping it updated
@@ -208,14 +220,18 @@ etc.) on the target machine to perform this entire setup unattended. It is
 self-contained — the agent figures out the rest.
 
 ```text
-Set up a public `opencode serve` endpoint on this machine so a mobile client
-can reach it, using a Cloudflare Tunnel. Do it fully — install everything,
-create the services, verify end-to-end. Report each step's result.
+Set up a public `opencode serve` (v2) endpoint on this machine so a mobile
+client can reach it, using a Cloudflare Tunnel. Do it fully — install
+everything, create the services, verify end-to-end. Report each step's result.
 
 CONTEXT
 - The opencode server's HTTP API must be reachable at https://oc.<YOUR-DOMAIN>/
   (substitute the real domain — pick a subdomain under a domain you control on
-  Cloudflare).
+  Cloudflare). Every route is under /api/….
+- opencode v2 ALWAYS enforces HTTP basic auth: username is always "opencode",
+  password comes from the OPENCODE_PASSWORD environment variable. Do not add
+  any other auth layer (no Caddy basic_auth, no nginx htpasswd) — it
+  double-authenticates and breaks.
 - The opencode server itself listens on 127.0.0.1:4100 and must NEVER bind a
   public interface. All exposure goes through the tunnel.
 - A Cloudflare zone must already exist for the domain; if cloudflared login is
@@ -225,21 +241,24 @@ CONTEXT
 STEPS
 
 1. Install opencode if missing (`curl -fsSL https://opencode.ai/install | bash`),
-   and confirm `opencode serve --port 4100` works briefly (Ctrl-C it after the
-   "listening" line). Use `which opencode` for the real binary path.
+   and confirm `OPENCODE_PASSWORD=test123 opencode serve --port 4100` works
+   briefly (Ctrl-C it after the "listening" line). Use `which opencode` for the
+   real binary path.
 
-2. Create a systemd service `/etc/systemd/system/opencode-serve.service`:
-   ExecStart=<binary> serve --port 4100, User=<current user>, Restart=always,
-   RestartSec=3. `systemctl enable --now` it and confirm `active (running)`.
+2. Create a systemd service /etc/systemd/system/opencode-serve.service with:
+   Environment=OPENCODE_PASSWORD=<a-long-random-password> (generate one and
+   remember it — the user needs it to connect), ExecStart=<binary> serve
+   --port 4100, User=<current user>, Restart=always, RestartSec=3.
+   `systemctl enable --now` it and confirm `active (running)`.
    Logs: `journalctl -u opencode-serve -n 20`.
 
-3. Install Caddy (apt or brew). Generate a bcrypt hash for password
-   "<PASSWORD>" with `caddy hash-password`. Write /etc/caddy/Caddyfile:
-   listen :4410, basic_auth with user "<USERNAME>" and that hash, reverse_proxy
-   127.0.0.1:4100 with `header_up Host localhost:4100`. Create a caddy systemd
-   service with the same restart pattern, enable and start it. Verify:
-   `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4410/path` is 401
-   unauthenticated and 200 with `-u <USERNAME>:<PASSWORD>`.
+3. Caddy (optional but recommended): install it (apt or brew), write
+   /etc/caddy/Caddyfile as a PLAIN reverse proxy — `:4410 { reverse_proxy
+   127.0.0.1:4100 { header_up Host localhost:4100 } }` — with NO basic_auth.
+   Create a caddy systemd service with the same restart pattern, enable and
+   start it. Verify: `curl -s -o /dev/null -w '%{http_code}'
+   http://127.0.0.1:4410/api/health` is 401 unauthenticated and 200 with
+   `-u opencode:<password>`.
 
 4. Install cloudflared. Run `cloudflared tunnel login` — if it needs a browser
    and cannot complete headless, STOP here and report that this one step needs
@@ -249,14 +268,14 @@ STEPS
    credentials JSON, `cloudflared tunnel route dns opencode oc.<DOMAIN>`,
    create a cloudflared systemd service (Restart=always), enable and start it.
 
-5. Verify publicly: `curl -u <USERNAME>:<PASSWORD> -o /dev/null -w '%{http_code}'
-   https://oc.<DOMAIN>/path` must be 200, and 401 without credentials. Also
-   confirm /project/current and /event work (event returns SSE with
-   server.connected).
+5. Verify publicly: `curl -u opencode:<password> -o /dev/null -w '%{http_code}'
+   https://oc.<DOMAIN>/api/health` must be 200 (body {"healthy":true,...}),
+   and 401 without credentials. Also confirm `GET /api/location` and
+   `GET /api/event` work (event returns SSE).
 
 6. Report: the three service names and their status, the public URL, the
-   username (never print the password or hash), and the exact curl commands you
-   used to verify.
+   username "opencode" (never print the password), and the exact curl commands
+   you used to verify.
 
 RULES
 - Never bind opencode to 0.0.0.0. Never disable auth. Never print passwords or
