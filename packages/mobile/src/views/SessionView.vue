@@ -38,6 +38,7 @@ import ModelAgentSheet from "@/components/chat/ModelAgentSheet.vue"
 import McpSheet from "@/components/mcp/McpSheet.vue"
 import PermissionCard from "@/components/chat/PermissionCard.vue"
 import PromptComposer from "@/components/chat/PromptComposer.vue"
+import QuestionCard from "@/components/chat/QuestionCard.vue"
 import QueuedPrompts from "@/components/chat/QueuedPrompts.vue"
 
 const route = useRoute()
@@ -80,6 +81,8 @@ const {
   abort,
   reload,
   respondPermission,
+  respondQuestion,
+  rejectQuestion,
   runCommand,
   cancelQueued,
   setQueuedDelivery,
@@ -87,10 +90,12 @@ const {
   model,
   setAgent,
   setModel,
+  questions,
 } = useSession(sessionId, directory)
 
 /** The agent answers one request at a time, so only the oldest is actionable. */
 const blocking = computed(() => permissions.value[0] ?? null)
+const question = computed(() => questions.value[0] ?? null)
 
 async function onPermissionReply(id: string, reply: PermissionReply): Promise<void> {
   try {
@@ -98,6 +103,14 @@ async function onPermissionReply(id: string, reply: PermissionReply): Promise<vo
   } catch {
     // The store puts the card back; there is nothing else useful to say.
   }
+}
+
+function onQuestionReply(id: string, answers: string[][]): void {
+  void respondQuestion(id, answers).catch(() => undefined)
+}
+
+function onQuestionDismiss(id: string): void {
+  void rejectQuestion(id).catch(() => undefined)
 }
 
 /**
@@ -573,6 +586,15 @@ watch(
           :request="blocking"
           :pending="permissions.length"
           @reply="onPermissionReply"
+        />
+
+        <QuestionCard
+          v-if="question"
+          :key="question.id"
+          :request="question"
+          :pending="questions.length"
+          @reply="onQuestionReply"
+          @dismiss="onQuestionDismiss"
         />
 
         <PromptComposer

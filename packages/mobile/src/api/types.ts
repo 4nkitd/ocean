@@ -377,6 +377,26 @@ export interface PermissionRequest {
 
 export type PermissionReply = "once" | "always" | "reject"
 
+export interface QuestionOption {
+  label: string
+  description?: string
+}
+
+export interface QuestionInfo {
+  question: string
+  header?: string
+  options: QuestionOption[]
+  multiple?: boolean
+  custom?: boolean
+}
+
+export interface QuestionRequest {
+  id: string
+  sessionID: string
+  questions: QuestionInfo[]
+  tool?: { messageID: string; callID: string }
+}
+
 /** `GET /api/agent` — one agent the session can run under. */
 export interface AgentInfo {
   id: string

@@ -10,6 +10,9 @@ import type {
   Part,
   PermissionReply,
   PermissionRequest,
+  QuestionInfo,
+  QuestionOption,
+  QuestionRequest,
   PromptAttachment,
   ServerEvent,
   TokenUsage,
@@ -105,6 +108,7 @@ export function useSession(
    * time, and answering the oldest is what unblocks it.
    */
   const permissions = ref<PermissionRequest[]>([])
+  const questions = ref<QuestionRequest[]>([])
   /**
    * Prompts admitted while the agent was mid-turn. v2 holds them in a session
    * inbox and delivers them when the turn ends, which is what makes it possible
@@ -725,6 +729,20 @@ export function useSession(
         return
       }
 
+      case "question.asked": {
+        const request = toQuestionRequest(data)
+        if (!request || questions.value.some((entry) => entry.id === request.id)) return
+        questions.value = [...questions.value, request]
+        return
+      }
+
+      case "question.replied":
+      case "question.rejected": {
+        const requestID = str(data.requestID)
+        questions.value = questions.value.filter((entry) => entry.id !== requestID)
+        return
+      }
+
       case "session.inbox.enqueued": {
         const inboxID = str(data.inboxID)
         const item = record(data.item)
@@ -780,16 +798,18 @@ export function useSession(
     error.value = null
     try {
       const client = requireClient()
-      const [history, detail, statuses, pending, inbox] = await Promise.all([
+      const [history, detail, statuses, pending, inbox, asked] = await Promise.all([
         client.listMessages(sid, dir, requestController.signal),
         client.getSession(sid, dir, requestController.signal).catch(() => null),
         client.getSessionStatuses(dir, requestController.signal).catch(() => null),
         client.listPermissions(sid, requestController.signal).catch(() => []),
         client.listInbox(sid, requestController.signal).catch(() => []),
+        client.listQuestions(sid, dir, requestController.signal).catch(() => []),
       ])
       if (token !== loadToken || requestController.signal.aborted) return
       mergeHistory(history)
       permissions.value = pending
+      questions.value = asked.filter((request) => request.sessionID === sid)
       queued.value = inbox
       title.value = detail?.title?.trim() || null
 
@@ -981,6 +1001,34 @@ export function useSession(
     }
   }
 
+  async function respondQuestion(requestId: string, answers: string[][]): Promise<void> {
+    const request = questions.value.find((candidate) => candidate.id === requestId)
+    if (!request) return
+    questions.value = questions.value.filter((candidate) => candidate.id !== requestId)
+    try {
+      await requireClient().replyQuestion(toValue(sessionId), requestId, answers, toValue(directory))
+    } catch (cause) {
+      questions.value = [...questions.value, request].sort((left, right) =>
+        left.id.localeCompare(right.id),
+      )
+      throw cause
+    }
+  }
+
+  async function rejectQuestion(requestId: string): Promise<void> {
+    const request = questions.value.find((candidate) => candidate.id === requestId)
+    if (!request) return
+    questions.value = questions.value.filter((candidate) => candidate.id !== requestId)
+    try {
+      await requireClient().rejectQuestion(toValue(sessionId), requestId, toValue(directory))
+    } catch (cause) {
+      questions.value = [...questions.value, request].sort((left, right) =>
+        left.id.localeCompare(right.id),
+      )
+      throw cause
+    }
+  }
+
   /**
    * Run a `/command`. The server owns the template — the client sends the name
    * and whatever followed it, never the expansion.
@@ -1077,6 +1125,7 @@ export function useSession(
       agent.value = null
       model.value = null
       permissions.value = []
+      questions.value = []
       queued.value = []
       sending.value = false
       busy.value = false
@@ -1102,6 +1151,7 @@ export function useSession(
     isStreaming,
     statusNote,
     permissions,
+    questions,
     queued,
     deliveryMode,
     title,
@@ -1112,6 +1162,8 @@ export function useSession(
     abort,
     reload,
     respondPermission,
+    respondQuestion,
+    rejectQuestion,
     runCommand,
     cancelQueued,
     setQueuedDelivery,
@@ -1121,6 +1173,41 @@ export function useSession(
 }
 
 // ── event payload readers ───────────────────────────────────────────────────
+
+function toQuestionRequest(data: Record<string, unknown>): QuestionRequest | null {
+  const id = str(data.id)
+  const sessionID = str(data.sessionID)
+  if (!id || !sessionID || !Array.isArray(data.questions)) return null
+
+  const questions = data.questions
+    .flatMap((entry): QuestionInfo[] => {
+      const info = record(entry)
+      const question = str(info?.question)
+      if (!question) return []
+      const options = Array.isArray(info?.options)
+        ? info.options
+            .flatMap((option): QuestionOption[] => {
+              const parsed = record(option)
+              const label = str(parsed?.label)
+              return label
+                ? [{ label, description: str(parsed?.description) ?? undefined }]
+                : []
+            })
+        : []
+      return [
+        {
+          question,
+          header: str(info?.header) ?? undefined,
+          options,
+          multiple: info?.multiple === true,
+          custom: info?.custom !== false,
+        },
+      ]
+    })
+
+  if (questions.length === 0) return null
+  return { id, sessionID, questions }
+}
 
 function str(value: unknown): string | null {
   return typeof value === "string" && value ? value : null

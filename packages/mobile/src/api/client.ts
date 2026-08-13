@@ -20,6 +20,7 @@ import type {
   Part,
   PermissionReply,
   PermissionRequest,
+  QuestionRequest,
   Project,
   PromptAttachment,
   ServerCredentials,
@@ -989,6 +990,37 @@ export class OpenCodeClient {
     await this.request(
       `/session/${encodeURIComponent(sessionId)}/permission/${encodeURIComponent(requestId)}/reply`,
       { method: "POST", body: { reply, ...(message ? { message } : {}) } },
+    )
+  }
+
+  async listQuestions(
+    sessionId: string,
+    _directory?: string,
+    signal?: AbortSignal,
+  ): Promise<QuestionRequest[]> {
+    const result = await this.data<QuestionRequest[]>(
+      `/session/${encodeURIComponent(sessionId)}/question`,
+      { signal, optional: true },
+    )
+    return result ?? []
+  }
+
+  async replyQuestion(
+    sessionId: string,
+    requestId: string,
+    answers: string[][],
+    _directory?: string,
+  ): Promise<void> {
+    await this.request(
+      `/session/${encodeURIComponent(sessionId)}/question/${encodeURIComponent(requestId)}/reply`,
+      { method: "POST", body: { answers } },
+    )
+  }
+
+  async rejectQuestion(sessionId: string, requestId: string, _directory?: string): Promise<void> {
+    await this.request(
+      `/session/${encodeURIComponent(sessionId)}/question/${encodeURIComponent(requestId)}/reject`,
+      { method: "POST" },
     )
   }
 
