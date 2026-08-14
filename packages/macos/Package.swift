@@ -1,5 +1,33 @@
 // swift-tools-version:6.0
+import Foundation
 import PackageDescription
+
+/*
+ This machine has Command Line Tools, not Xcode: there is no XCTest at all, and
+ `Testing.framework` sits outside every default search path, so the test target
+ cannot find `import Testing` without being told where to look. The directory
+ does not exist on a machine with Xcode, where the toolchain finds both on its
+ own, so the flags are only added when it does.
+ */
+let commandLineToolFrameworks =
+  "/Library/Developer/CommandLineTools/Library/Developer/Frameworks"
+let hasCommandLineToolFrameworks = FileManager.default.fileExists(
+  atPath: commandLineToolFrameworks)
+
+let testSwiftSettings: [SwiftSetting] =
+  hasCommandLineToolFrameworks
+  ? [.swiftLanguageMode(.v5), .unsafeFlags(["-F", commandLineToolFrameworks, "-enable-experimental-feature", "SymbolLinkageMarkers"])]
+  : [.swiftLanguageMode(.v5)]
+
+let testLinkerSettings: [LinkerSetting] =
+  hasCommandLineToolFrameworks
+  ? [
+    .unsafeFlags([
+      "-F", commandLineToolFrameworks,
+      "-Xlinker", "-rpath", "-Xlinker", commandLineToolFrameworks,
+    ])
+  ]
+  : []
 
 /**
  Ocean for macOS.
@@ -63,7 +91,8 @@ let package = Package(
     .testTarget(
       name: "OceanKitTests",
       dependencies: ["OceanKit"],
-      swiftSettings: [.swiftLanguageMode(.v5)]
+      swiftSettings: testSwiftSettings,
+      linkerSettings: testLinkerSettings
     ),
   ]
 )
