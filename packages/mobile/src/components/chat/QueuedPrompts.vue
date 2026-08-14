@@ -18,7 +18,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <ul v-if="items.length" class="queue" aria-label="Queued prompts">
+  <ul v-if="items.length" v-rise class="queue" aria-label="Queued prompts">
     <li v-for="item in items" :key="item.id" class="queue__row">
       <button
         type="button"

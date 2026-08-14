@@ -356,6 +356,25 @@ watch(sessionId, () => {
 
 const showJump = computed(() => !following.value && messages.value.length > 0)
 
+/**
+ * True once the conversation that already existed has been painted. Turns that
+ * mount after this point are ones the user is watching arrive, and those are
+ * the only ones worth animating.
+ */
+const hydrated = ref(false)
+
+watch(
+  loading,
+  (busy) => {
+    if (!busy) void nextTick(() => (hydrated.value = true))
+  },
+  { immediate: true },
+)
+
+watch(sessionId, () => {
+  hydrated.value = false
+})
+
 // ── actions ──────────────────────────────────────────────────────────────
 
 const commands = ref<CommandInfo[]>([])
@@ -673,11 +692,12 @@ watch(
               variant="empty"
               message="No messages yet — ask something about this repo"
             />
-            <div v-else class="turns" aria-live="polite" :aria-busy="loading || isStreaming">
+            <div v-else v-rise class="turns" aria-live="polite" :aria-busy="loading || isStreaming">
               <MessageBubble
                 v-for="message in messages"
                 :key="message.info.id"
                 :message="message"
+                :entrance="hydrated"
                 @open="openFile"
                 @retry="retry"
               />

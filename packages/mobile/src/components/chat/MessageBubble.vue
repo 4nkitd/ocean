@@ -10,17 +10,31 @@
  * Model output is never trusted as markup. It is parsed into tokens here and
  * rendered through Vue bindings — no `v-html` touches anything the model wrote.
  */
-import { computed, ref } from "vue"
+import { computed, onMounted, ref } from "vue"
 import type { Part } from "@/api/types"
 import type { SessionMessage } from "@/stores/session"
 import ImageLightbox from "@/components/ui/ImageLightbox.vue"
+import { rise } from "@/lib/motion"
 import ToolCard from "./ToolCard.vue"
 
-const props = defineProps<{ message: SessionMessage }>()
+const props = defineProps<{
+  message: SessionMessage
+  /**
+   * Animate this turn as it arrives. Off during the initial load — a session
+   * with two hundred messages would otherwise stage the entire history on open.
+   */
+  entrance?: boolean
+}>()
 const emit = defineEmits<{ open: [path: string]; retry: [id: string] }>()
 
 /** The attached image being looked at full size, if any. */
 const preview = ref<Part | null>(null)
+
+const turn = ref<HTMLElement | null>(null)
+
+onMounted(() => {
+  if (props.entrance && turn.value) rise(turn.value, { distance: 8 })
+})
 
 // ── minimal markdown ───────────────────────────────────────────────────────
 
@@ -195,7 +209,7 @@ const awaitingOutput = computed(
 </script>
 
 <template>
-  <article class="turn" :class="isUser ? 'turn--user' : 'turn--assistant'">
+  <article ref="turn" class="turn" :class="isUser ? 'turn--user' : 'turn--assistant'">
     <div class="turn__label" :class="{ 'turn__label--accent': !isUser }">
       {{ isUser ? "You" : "opencode" }}
     </div>
