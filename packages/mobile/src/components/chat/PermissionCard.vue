@@ -58,7 +58,13 @@ function reply(answer: PermissionReply): void {
 </script>
 
 <template>
-  <section class="ask" role="alertdialog" aria-live="assertive" :aria-label="`Allow ${action}?`">
+  <section
+    v-rise
+    class="ask"
+    role="alertdialog"
+    aria-live="assertive"
+    :aria-label="`Allow ${action}?`"
+  >
     <header class="ask__head">
       <AppIcon name="spinner" :size="13" class="ask__spin" />
       <span class="ask__kicker">Waiting for you</span>

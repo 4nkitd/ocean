@@ -205,7 +205,7 @@ onUnmounted(() => {
         message="Nothing is running. Start a session and it will show up here."
       />
 
-      <ul v-else class="list">
+      <ul v-else v-rise-list class="list">
         <li v-for="row in rows" :key="row.session.id">
           <button
             type="button"

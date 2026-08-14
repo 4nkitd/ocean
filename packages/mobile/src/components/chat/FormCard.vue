@@ -209,6 +209,11 @@ function stepOf(field: FormField): string {
   return field.type === "integer" ? "1" : "any"
 }
 
+/** No decimal point on the keypad for a field that cannot take one. */
+function modeOf(field: FormField): "numeric" | "decimal" {
+  return field.type === "integer" ? "numeric" : "decimal"
+}
+
 function isPicked(field: FormField, value: string): boolean {
   return (picks.value[field.key] ?? []).includes(value)
 }
@@ -263,7 +268,7 @@ function cancel(): void {
 </script>
 
 <template>
-  <section class="ask" role="alertdialog" aria-live="assertive" :aria-label="request.title">
+  <section v-rise class="ask" role="alertdialog" aria-live="assertive" :aria-label="request.title">
     <header class="ask__head">
       <AppIcon name="spinner" :size="13" class="ask__spin" />
       <span class="ask__kicker">The agent needs details</span>
@@ -322,7 +327,7 @@ function cancel(): void {
           v-model="texts[field.key]"
           type="number"
           class="f__input"
-          inputmode="decimal"
+          :inputmode="modeOf(field)"
           :min="boundOf(field, 'minimum')"
           :max="boundOf(field, 'maximum')"
           :step="stepOf(field)"

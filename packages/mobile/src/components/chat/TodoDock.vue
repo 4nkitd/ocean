@@ -37,7 +37,7 @@ function mark(status: TodoItem["status"]): string {
 </script>
 
 <template>
-  <section class="todos" :class="`todos--${variant}`" aria-label="Agent plan">
+  <section v-rise class="todos" :class="`todos--${variant}`" aria-label="Agent plan">
     <component
       :is="variant === 'panel' ? 'div' : 'button'"
       :type="variant === 'panel' ? undefined : 'button'"

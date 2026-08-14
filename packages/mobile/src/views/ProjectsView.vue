@@ -175,7 +175,7 @@ function chooseDirectory(path: string) {
         :message="`Nothing here matches “${query}”.`"
       />
 
-      <ul v-if="!loading && !error" class="list">
+      <ul v-if="!loading && !error" v-rise-list class="list">
         <ProjectCard
           v-for="(project, index) in visibleProjects"
           :key="project.id"

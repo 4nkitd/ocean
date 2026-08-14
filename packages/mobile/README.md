@@ -60,6 +60,7 @@ src/
     filetype.ts    file-type badges, language detection
     highlight.ts   dependency-free syntax highlighting
     diff.ts        unified-diff parsing
+    motion.ts      the v-rise / v-rise-list entrance directives
   styles/
     tokens.css     the design system, as custom properties
     base.css       reset and shared primitives
@@ -107,6 +108,19 @@ base and its high-contrast variant.
 Two rules are easy to break by accident and load-bearing when kept: nothing has a border
 radius, and button labels sit flush left with the trailing icon pushed to the edge. Take
 colours, spacing and type from the tokens rather than restating them.
+
+### Motion
+
+`motion` is the one runtime dependency beyond Vue, and it costs about 6kB gzipped. It is
+there to say where a surface came from — sheets and blocking cards rise into place, lists
+arrive in one staggered wave — and not to decorate: nothing bounces, scales from nothing,
+or travels across the screen. Use the `v-rise` and `v-rise-list` directives from
+`lib/motion.ts` rather than calling `animate` in a component.
+
+Two rules that are easy to get wrong. Only the first twelve children of a list are
+animated, because a staggered delay across a real list (this author's server lists 617
+projects) leaves the tail invisible for seventeen seconds. And `prefers-reduced-motion` is
+a full stop, not a downgrade: `lib/motion.ts` returns without animating anything.
 
 ## Accessibility and mobile behaviour
 

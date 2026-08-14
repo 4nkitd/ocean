@@ -29,6 +29,7 @@ onMounted(() => sheet.value?.focus())
   <div class="backdrop" @click.self="emit('close')">
     <section
       ref="sheet"
+      v-rise="{ distance: 22 }"
       class="sheet"
       role="dialog"
       aria-modal="true"
@@ -68,15 +69,7 @@ onMounted(() => sheet.value?.focus())
   background: var(--surface);
   border-top: 2px solid var(--accent);
   padding-bottom: var(--safe-bottom);
-  animation: rise 0.18s ease-out;
   outline: none;
-}
-
-@keyframes rise {
-  from {
-    transform: translateY(12px);
-    opacity: 0;
-  }
 }
 
 .sheet__head {
@@ -120,18 +113,10 @@ onMounted(() => sheet.value?.focus())
     border-top-color: var(--accent);
     padding-bottom: 0;
     box-shadow: 0 24px 70px color-mix(in srgb, #000 45%, transparent);
-    animation: pop 0.16s ease-out;
   }
 
   .sheet__head {
     padding: 16px 20px 14px;
-  }
-}
-
-@keyframes pop {
-  from {
-    transform: translateY(8px) scale(0.985);
-    opacity: 0;
   }
 }
 </style>

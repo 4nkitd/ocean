@@ -1,10 +1,14 @@
 import { createApp } from "vue"
 import App from "./App.vue"
 import { router } from "./router"
+import { vRise, vRiseList } from "./lib/motion"
 import "./stores/appearance"
 import "./styles/base.css"
 
 const app = createApp(App)
+
+app.directive("rise", vRise)
+app.directive("rise-list", vRiseList)
 
 /**
  * Errors thrown outside a render pass — in an event handler, a watcher, or a

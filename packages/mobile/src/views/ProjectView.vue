@@ -220,10 +220,11 @@ function permissionDetail(event: ServerEvent): string {
   const data = event.data
   const kind = readString(data, "action")
   const resources = Array.isArray(data.resources) ? data.resources : []
-  const resource =
-    resources.find((entry): entry is string => typeof entry === "string") ?? null
+  const resource = resources.find((entry): entry is string => typeof entry === "string") ?? null
   const title = readString(data, "metadata", "title")
-  const parts = [kind, resource ? basename(resource) : null].filter((part): part is string => Boolean(part))
+  const parts = [kind, resource ? basename(resource) : null].filter((part): part is string =>
+    Boolean(part),
+  )
   return parts.length > 0 ? parts.join(" · ") : (title ?? "Awaiting your approval")
 }
 
@@ -336,7 +337,7 @@ onUnmounted(() => {
         message="Nothing has been started in this directory. Open one below and it will appear here."
       />
 
-      <ul v-else class="list" aria-live="polite">
+      <ul v-else v-rise-list class="list" aria-live="polite">
         <SessionRow
           v-for="session in sessions"
           :key="session.id"

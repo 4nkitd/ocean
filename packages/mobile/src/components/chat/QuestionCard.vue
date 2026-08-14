@@ -77,6 +77,7 @@ function dismiss(): void {
 
 <template>
   <section
+    v-rise
     class="ask"
     role="alertdialog"
     aria-live="assertive"

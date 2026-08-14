@@ -42,7 +42,12 @@ function reconnect(entry: Readonly<RecentServer>): void {
   }
   if (entry.useBasicAuth) {
     // Seed Connect's form; it focuses the password field on arrival.
-    lastAttempt.value = { url: entry.url, useBasicAuth: true, username: entry.username ?? "", password: "" }
+    lastAttempt.value = {
+      url: entry.url,
+      useBasicAuth: true,
+      username: entry.username ?? "",
+      password: "",
+    }
     void router.push("/connect")
     return
   }
@@ -64,19 +69,30 @@ function hostOf(rawUrl: string): string {
   <section class="screen">
     <header class="header">
       <div class="header__context">
-        <span class="header__dot" :class="{ 'header__dot--live': streamConnected }" aria-hidden="true" />
+        <span
+          class="header__dot"
+          :class="{ 'header__dot--live': streamConnected }"
+          aria-hidden="true"
+        />
         <span class="header__server">{{ serverLabel }}</span>
       </div>
       <h1 class="header__title">Recent</h1>
     </header>
 
     <div class="screen__body scroll-y">
-      <ul v-if="recents.length" class="list">
-        <li v-for="entry in recents" :key="entry.url" class="list__row" :class="{ 'list__row--current': isCurrent(entry) }">
+      <ul v-if="recents.length" v-rise-list class="list">
+        <li
+          v-for="entry in recents"
+          :key="entry.url"
+          class="list__row"
+          :class="{ 'list__row--current': isCurrent(entry) }"
+        >
           <button type="button" class="list__open" @click="reconnect(entry)">
             <span class="list__text">
               <span class="list__host mono">{{ hostOf(entry.url) }}</span>
-              <span class="list__path mono">{{ displayPath(entry.lastDirectory ?? "") || "directory unknown" }}</span>
+              <span class="list__path mono">{{
+                displayPath(entry.lastDirectory ?? "") || "directory unknown"
+              }}</span>
               <span class="list__meta">
                 <span class="chip" :class="{ 'chip--on': entry.useBasicAuth }">
                   {{ entry.useBasicAuth ? `auth · ${entry.username ?? "user"}` : "no auth" }}

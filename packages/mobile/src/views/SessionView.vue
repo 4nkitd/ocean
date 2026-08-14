@@ -564,7 +564,12 @@ watch(
           </button>
         </div>
 
-        <nav v-if="!isDesktop && mobileMenuOpen" class="head__menu" aria-label="Session actions">
+        <nav
+          v-if="!isDesktop && mobileMenuOpen"
+          v-rise.down
+          class="head__menu"
+          aria-label="Session actions"
+        >
           <button type="button" class="head__menu-item" @click="openMcpFromMenu">
             <AppIcon name="mcp" :size="16" />
             <span>MCP servers</span>
@@ -679,7 +684,7 @@ watch(
             </div>
           </div>
 
-          <button v-if="showJump" type="button" class="jump" @click="scrollToBottom(true)">
+          <button v-if="showJump" v-rise type="button" class="jump" @click="scrollToBottom(true)">
             <span>Jump to latest</span>
             <AppIcon name="chevron-down" :size="14" />
           </button>
