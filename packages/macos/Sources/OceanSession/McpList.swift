@@ -10,6 +10,12 @@ public struct McpList: View {
   private let actionError: String?
   private let pending: Set<String>
   private let onToggle: (McpServer, Bool) -> Void
+  private let onAdd: ((String, String) -> Void)?
+  private let onRemove: ((McpServer) -> Void)?
+
+  @State private var isAdding = false
+  @State private var newName = ""
+  @State private var newCommand = ""
 
   @Environment(\.palette) private var palette
 
@@ -19,7 +25,9 @@ public struct McpList: View {
     error: String?,
     actionError: String? = nil,
     pending: Set<String> = [],
-    onToggle: @escaping (McpServer, Bool) -> Void
+    onToggle: @escaping (McpServer, Bool) -> Void,
+    onAdd: ((String, String) -> Void)? = nil,
+    onRemove: ((McpServer) -> Void)? = nil
   ) {
     self.servers = servers
     self.loading = loading
@@ -27,10 +35,16 @@ public struct McpList: View {
     self.actionError = actionError
     self.pending = pending
     self.onToggle = onToggle
+    self.onAdd = onAdd
+    self.onRemove = onRemove
   }
 
   public var body: some View {
     VStack(alignment: .leading, spacing: 0) {
+      if onAdd != nil {
+        addServerRow
+      }
+
       if loading {
         HStack(spacing: Space.s2) {
           Spinner(size: 14).foregroundStyle(palette.textDim)
@@ -68,16 +82,31 @@ public struct McpList: View {
             let isConnected = server.status == .connected
             let isPending = pending.contains(server.name)
 
-            AppToggle(
-              server.name,
-              isOn: Binding(
-                get: { isConnected },
-                set: { newValue in onToggle(server, newValue) }
-              ),
-              description: statusLabel(server)
-            )
-            .disabled(isPending)
-            .padding(.horizontal, Space.s4)
+            VStack(spacing: 0) {
+              HStack(spacing: Space.s2) {
+                AppToggle(
+                  server.name,
+                  isOn: Binding(
+                    get: { isConnected },
+                    set: { newValue in onToggle(server, newValue) }
+                  ),
+                  description: statusLabel(server),
+                  monoDescription: server.status == .failed
+                )
+                .disabled(isPending)
+
+                if let onRemove {
+                  IconButton(.close, label: "Remove server", size: 14) {
+                    onRemove(server)
+                  }
+                  .foregroundStyle(palette.textMuted)
+                  .disabled(isPending)
+                }
+              }
+              .padding(.horizontal, Space.s4)
+
+              RuleLine(.row)
+            }
           }
         }
 
@@ -86,6 +115,71 @@ public struct McpList: View {
           .foregroundStyle(palette.textDim)
           .padding(Space.s4)
       }
+    }
+  }
+
+  @ViewBuilder
+  private var addServerRow: some View {
+    if !isAdding {
+      Button {
+        isAdding = true
+      } label: {
+        HStack(spacing: Space.s2) {
+          AppIcon(.plus, size: 12)
+            .foregroundStyle(palette.accent)
+          Text("Add server")
+            .mono(12, weight: .semibold)
+            .foregroundStyle(palette.text)
+          Spacer()
+        }
+        .padding(.horizontal, Space.s4)
+        .padding(.vertical, Space.s3)
+        .background(palette.surface)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .overlay(alignment: .bottom) { RuleLine(.row) }
+    } else {
+      VStack(alignment: .leading, spacing: Space.s3) {
+        HStack {
+          SectionLabel("ADD MCP SERVER")
+          Spacer()
+          IconButton(.close, label: "Cancel", size: 12) {
+            isAdding = false
+            newName = ""
+            newCommand = ""
+          }
+        }
+
+        AppTextField(
+          "NAME",
+          text: $newName,
+          placeholder: "server-name"
+        )
+
+        AppTextField(
+          "COMMAND",
+          text: $newCommand,
+          placeholder: "npx -y @modelcontextprotocol/server-..."
+        )
+
+        HStack {
+          Spacer()
+          AppButton("Add", variant: .primary, icon: .plus) {
+            let name = newName.trimmingCharacters(in: .whitespaces)
+            let cmd = newCommand.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !cmd.isEmpty else { return }
+            onAdd?(name, cmd)
+            newName = ""
+            newCommand = ""
+            isAdding = false
+          }
+          .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty || newCommand.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+      }
+      .padding(Space.s4)
+      .background(palette.surfaceRaised)
+      .overlay(alignment: .bottom) { RuleLine(.row) }
     }
   }
 

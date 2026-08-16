@@ -111,7 +111,7 @@ public final class ProjectsStore {
       )
     }
 
-    let ordered = sortByOrder(rows, order: order)
+    let ordered = Self.sortByOrder(rows, order: order)
     return ordered.filter(\.favourite) + ordered.filter { !$0.favourite }
   }
 
@@ -161,13 +161,22 @@ public final class ProjectsStore {
       let statuses = (try? await client.getSessionStatuses()) ?? [:]
 
       let home = connectionStore.appInfo?.home
-      var decorated: [LoadedProject] = []
-      for project in list {
-        let loadedItem = await decorate(client: client, project: project, home: home)
-        decorated.append(loadedItem)
+      var decorated = [LoadedProject?](repeating: nil, count: list.count)
+      let chunkSize = 6
+      for chunkStart in stride(from: 0, to: list.count, by: chunkSize) {
+        let chunkEnd = min(chunkStart + chunkSize, list.count)
+        let tasks = (chunkStart..<chunkEnd).map { index in
+          let project = list[index]
+          return Task {
+            await Self.decorate(client: client, project: project, home: home)
+          }
+        }
+        for (offset, task) in tasks.enumerated() {
+          decorated[chunkStart + offset] = await task.value
+        }
       }
 
-      self.rawLoaded = decorated
+      self.rawLoaded = decorated.compactMap { $0 }
       self.runningSessions = Set(statuses.filter { $0.value != "idle" }.map(\.key))
       self.loading = false
     } catch {
@@ -237,7 +246,7 @@ public final class ProjectsStore {
     }
   }
 
-  private func decorate(client: OpenCodeClient, project: Project, home: String?) async -> LoadedProject {
+  private static func decorate(client: OpenCodeClient, project: Project, home: String?) async -> LoadedProject {
     let sessions = (try? await client.listSessions(project.worktree)) ?? []
     let branch: String?
     if project.isGit {
@@ -281,7 +290,7 @@ public final class ProjectsStore {
     defaults.set(order, forKey: Self.orderKey)
   }
 
-  private func sortByOrder(_ rows: [ProjectRow], order: [String]) -> [ProjectRow] {
+  public static func sortByOrder(_ rows: [ProjectRow], order: [String]) -> [ProjectRow] {
     let pinnedMap = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($1, $0) })
     return rows.sorted { a, b in
       let left = pinnedMap[a.id]

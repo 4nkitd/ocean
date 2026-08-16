@@ -9,15 +9,17 @@ import SwiftUI
 public struct AppToggle: View {
   private let label: String
   private let description: String?
+  private let monoDescription: Bool
   private let isOn: Binding<Bool>
 
   @Environment(\.palette) private var palette
   @Environment(\.isEnabled) private var isEnabled
 
-  public init(_ label: String, isOn: Binding<Bool>, description: String? = nil) {
+  public init(_ label: String, isOn: Binding<Bool>, description: String? = nil, monoDescription: Bool = false) {
     self.label = label
     self.isOn = isOn
     self.description = description
+    self.monoDescription = monoDescription
   }
 
   public var body: some View {
@@ -30,10 +32,17 @@ public struct AppToggle: View {
             .bodyText(14, weight: .semibold)
             .foregroundStyle(palette.text)
           if let description {
-            Text(description)
-              .bodyText(12)
-              .foregroundStyle(palette.textMuted)
-              .fixedSize(horizontal: false, vertical: true)
+            if monoDescription {
+              Text(description)
+                .mono(11.5)
+                .foregroundStyle(palette.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+              Text(description)
+                .bodyText(12)
+                .foregroundStyle(palette.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            }
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

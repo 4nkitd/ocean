@@ -268,6 +268,7 @@ public struct FormCard: View {
               .padding(Space.s2)
               .background(palette.surface)
               .overlay(Rectangle().strokeBorder(picked ? palette.accent : palette.rule, lineWidth: RuleWidth.section))
+              .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
           }
@@ -306,6 +307,7 @@ public struct FormCard: View {
                 .padding(Space.s2)
                 .background(palette.surface)
                 .overlay(Rectangle().strokeBorder(picked ? palette.accent : palette.rule, lineWidth: RuleWidth.section))
+                .contentShape(Rectangle())
               }
               .buttonStyle(.plain)
             }

@@ -8,6 +8,7 @@ import SwiftUI
  Ported from `ServerView.vue` and `ConnectView.vue`.
  */
 public struct ServerSwitcher: View {
+  private let onNeedCredentials: ((String) -> Void)?
   private let onSelectServer: ((RecentServer) -> Void)?
 
   @State private var connectionStore = ConnectionStore.shared
@@ -15,7 +16,11 @@ public struct ServerSwitcher: View {
   @State private var switchError: String? = nil
   @Environment(\.palette) private var palette
 
-  public init(onSelectServer: ((RecentServer) -> Void)? = nil) {
+  public init(
+    onNeedCredentials: ((String) -> Void)? = nil,
+    onSelectServer: ((RecentServer) -> Void)? = nil
+  ) {
+    self.onNeedCredentials = onNeedCredentials
     self.onSelectServer = onSelectServer
   }
 
@@ -114,6 +119,11 @@ public struct ServerSwitcher: View {
       return
     }
 
+    if connectionStore.savedServer(entry.url) == nil, let onNeedCredentials {
+      onNeedCredentials(entry.url)
+      return
+    }
+
     Task {
       switchingURL = entry.url
       switchError = nil
@@ -121,7 +131,11 @@ public struct ServerSwitcher: View {
       switchingURL = nil
       if !success {
         if connectionStore.authFailed {
-          switchError = "Credentials rejected. Please connect with password."
+          if let onNeedCredentials {
+            onNeedCredentials(entry.url)
+          } else {
+            switchError = "Credentials rejected. Please connect with password."
+          }
         } else {
           switchError = connectionStore.error ?? "Could not switch to that server."
         }

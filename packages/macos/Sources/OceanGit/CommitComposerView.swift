@@ -156,6 +156,7 @@ public struct CommitComposerView: View {
             }
           }
         } label: {
+          let isDisabled = disabledReason != nil || store.commitPending
           HStack(spacing: Space.s2) {
             if store.commitPending {
               Spinner(size: 14)
@@ -165,15 +166,14 @@ public struct CommitComposerView: View {
             Text("Commit")
               .font(OceanFont.heading(13, weight: .bold))
           }
-          .foregroundStyle(palette.onAccent)
+          .foregroundStyle(isDisabled ? palette.textDim : palette.onAccent)
           .padding(.horizontal, Space.s4)
           .frame(minWidth: 80, maxHeight: .infinity)
-          .background(palette.accent)
+          .background(isDisabled ? palette.surfaceRaised : palette.accent)
           .clipShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(disabledReason != nil || store.commitPending)
-        .opacity(disabledReason != nil ? 0.45 : 1.0)
       }
       .frame(height: 44)
     }

@@ -47,20 +47,18 @@ public struct ActiveView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(palette.bg)
     .task {
-      store.startTimer()
+      store.setActive(true)
       await store.refresh()
     }
     .onDisappear {
-      store.stopTimer()
+      store.setActive(false)
     }
   }
 
   private var headerView: some View {
     HStack {
       VStack(alignment: .leading, spacing: 2) {
-        Text("Active")
-          .font(OceanFont.body(24, weight: .bold))
-          .foregroundStyle(palette.text)
+        SectionLabel("ACTIVE")
 
         Text(subText)
           .mono(11)
@@ -70,7 +68,7 @@ public struct ActiveView: View {
 
       Spacer()
 
-      IconButton(.refresh, label: "Refresh", size: 18) {
+      IconButton(.refresh, label: "Refresh active sessions", size: 18) {
         Task { await store.refresh() }
       }
     }
@@ -144,6 +142,7 @@ public struct ActiveView: View {
         }
       }
       .overlay(alignment: .bottom) { RuleLine(.row) }
+      .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
   }

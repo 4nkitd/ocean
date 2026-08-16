@@ -35,38 +35,46 @@ public struct ProjectCard: View {
   }
 
   public var body: some View {
-    HStack(spacing: Space.s4) {
+    HStack(spacing: 0) {
       Button {
         if !reordering { onSelect() }
       } label: {
         HStack(spacing: Space.s4) {
           tile
           bodyText
+          Spacer(minLength: 0)
         }
+        .padding(Space.s4)
+        .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
 
-      Spacer(minLength: 0)
-
       if reordering {
         reorderButtons
+          .padding(.trailing, Space.s4)
+          .padding(.vertical, Space.s4)
       } else {
         trailingInfo
+          .padding(.trailing, Space.s4)
+          .padding(.vertical, Space.s4)
       }
     }
-    .padding(Space.s4)
     .background(active ? palette.surfaceRaised : palette.surface)
-    .overlay(
-      Rectangle().strokeBorder(active ? palette.accent : palette.rule, lineWidth: RuleWidth.section)
-    )
+    .overlay(alignment: .leading) {
+      if active {
+        Rectangle()
+          .fill(palette.accent)
+          .frame(width: 2)
+      }
+    }
   }
 
   private var tile: some View {
     Text(project.initials)
       .font(OceanFont.mono(15, weight: .bold))
-      .foregroundStyle(active ? palette.onAccent : palette.textSecondary)
+      .foregroundStyle(palette.textSecondary)
       .frame(width: 44, height: 44)
-      .background(active ? palette.accent : palette.surfaceSunken)
+      .background(palette.surfaceSunken)
   }
 
   private var bodyText: some View {
@@ -74,15 +82,18 @@ public struct ProjectCard: View {
       Text(project.name)
         .font(OceanFont.body(15, weight: .semibold))
         .foregroundStyle(palette.text)
+        .lineLimit(1)
+        .truncationMode(.middle)
 
       Text(project.displayPath)
         .mono(11)
         .foregroundStyle(palette.textMuted)
         .lineLimit(1)
+        .truncationMode(.middle)
 
       HStack(spacing: Space.s2) {
         if project.isGit {
-          Chip(project.branch ?? "git", tone: active ? .on : .neutral)
+          Chip(project.branch ?? "git", tone: .neutral)
         } else {
           Chip("NO REPO", tone: .neutral)
         }
@@ -100,7 +111,7 @@ public struct ProjectCard: View {
       Button(action: onFavourite) {
         Text("★")
           .font(.system(size: 14))
-          .foregroundStyle(project.favourite ? palette.accent : palette.textFaint)
+          .foregroundStyle(project.favourite ? palette.text : palette.textFaint)
           .frame(width: 24, height: 24)
       }
       .buttonStyle(.plain)

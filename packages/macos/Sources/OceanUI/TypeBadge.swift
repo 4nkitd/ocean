@@ -8,7 +8,7 @@ public struct TypeBadge: View {
 
   @Environment(\.palette) private var palette
 
-  public init(_ filename: String, size: CGFloat = 20) {
+  public init(_ filename: String, size: CGFloat = 18) {
     self.filename = filename
     self.size = size
   }
@@ -16,9 +16,10 @@ public struct TypeBadge: View {
   public var body: some View {
     let badge = FileType.badge(for: filename)
     Text(badge.code)
-      .font(OceanFont.mono(fontSize(badge.code), weight: .bold))
-      .tracking(-0.02 * fontSize(badge.code))
+      .font(OceanFont.mono(9, weight: .bold))
       .foregroundStyle(foreground(badge.tone))
+      .lineLimit(1)
+      .minimumScaleFactor(0.75)
       .frame(width: size, height: size)
       .background(background(badge.tone))
       .accessibilityHidden(true)

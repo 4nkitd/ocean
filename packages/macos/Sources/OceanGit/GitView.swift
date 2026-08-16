@@ -10,10 +10,13 @@ public struct GitView: View {
   @Environment(\.palette) private var palette
   @State private var viewMode: ViewMode = .changes
   @State private var selectedCommitHash: String? = nil
+  @State private var newWorktreePath: String = ""
+  @State private var newWorktreeBranch: String = ""
 
   public enum ViewMode: String, Sendable, CaseIterable {
     case changes = "Changes"
     case commits = "Commits"
+    case worktrees = "Worktrees"
   }
 
   public init(
@@ -45,60 +48,57 @@ public struct GitView: View {
   public var body: some View {
     VStack(spacing: 0) {
       // Header
-      VStack(alignment: .leading, spacing: 6) {
-        HStack(spacing: Space.s3) {
-          HStack(spacing: 9) {
-            AppIcon(.gitBranch, size: 15)
-              .foregroundStyle(palette.textMuted)
-
-            Text(branchName)
-              .mono(14)
-              .lineLimit(1)
-              .foregroundStyle(palette.text)
+      SectionHeader(isRepo ? "WORKING TREE" : "GIT") {
+        if let onOpenProjects {
+          IconButton(.grid, label: "All projects", size: 16) {
+            onOpenProjects()
           }
+        }
+      }
+
+      // Compact Branch Bar
+      if isRepo {
+        HStack(spacing: Space.s2) {
+          AppIcon(.gitBranch, size: 13)
+            .foregroundStyle(palette.textMuted)
+
+          Text(branchName)
+            .mono(12, weight: .medium)
+            .lineLimit(1)
+            .foregroundStyle(palette.text)
 
           Spacer()
 
-          if let onOpenProjects {
-            Button(action: onOpenProjects) {
-              AppIcon(.grid, size: 18)
+          if let status = store.status {
+            HStack(spacing: Space.s3) {
+              Text("↑\(status.ahead)")
+                .mono(11)
                 .foregroundStyle(palette.textMuted)
-                .padding(Space.s1)
-            }
-            .buttonStyle(.plain)
-          }
-        }
 
-        if isRepo, let status = store.status {
-          HStack(spacing: Space.s4) {
-            Text("↑\(status.ahead)")
-              .mono(12)
-              .foregroundStyle(palette.textMuted)
-
-            Text("↓\(status.behind)")
-              .mono(12)
-              .foregroundStyle(palette.textMuted)
-
-            if let upstream = status.upstream {
-              Text(upstream)
-                .mono(12)
-                .lineLimit(1)
+              Text("↓\(status.behind)")
+                .mono(11)
                 .foregroundStyle(palette.textMuted)
-            } else {
-              Text("no upstream")
-                .mono(12)
-                .foregroundStyle(palette.textMuted)
+
+              if let upstream = status.upstream {
+                Text(upstream)
+                  .mono(11)
+                  .lineLimit(1)
+                  .foregroundStyle(palette.textMuted)
+              } else {
+                Text("no upstream")
+                  .mono(11)
+                  .foregroundStyle(palette.textMuted)
+              }
             }
           }
         }
+        .padding(.horizontal, Space.s4)
+        .padding(.vertical, Space.s2)
+        .background(palette.surfaceSunken)
+        .overlay(alignment: .bottom) {
+          RuleLine(.row)
+        }
       }
-      .padding(.horizontal, Space.s4)
-      .padding(.vertical, Space.s3)
-      .background(palette.surface)
-      .overlay(alignment: .bottom) {
-        RuleLine(.section)
-      }
-      .fixedSize(horizontal: false, vertical: true)
 
       // Mode Switcher
       if isRepo {
@@ -124,7 +124,7 @@ public struct GitView: View {
             .background(palette.surface)
             .overlay(alignment: .bottom) {
               Rectangle()
-                .fill(viewMode == .changes ? palette.text : Color.clear)
+                .fill(viewMode == .changes ? palette.accent : Color.clear)
                 .frame(height: 2)
             }
           }
@@ -150,11 +150,40 @@ public struct GitView: View {
             .background(palette.surface)
             .overlay(alignment: .bottom) {
               Rectangle()
-                .fill(viewMode == .commits ? palette.text : Color.clear)
+                .fill(viewMode == .commits ? palette.accent : Color.clear)
                 .frame(height: 2)
             }
           }
           .buttonStyle(.plain)
+
+          RuleLine(.row, axis: .vertical)
+
+          let worktreesAvailable = store.worktrees != nil || store.worktreesLoading || store.worktreesError != nil
+          Button {
+            viewMode = .worktrees
+            Task { await store.loadWorktrees() }
+          } label: {
+            HStack(spacing: 7) {
+              AppIcon(.gitBranch, size: 14)
+                .foregroundStyle(viewMode == .worktrees ? palette.text : palette.textMuted)
+
+              Text("WORKTREES")
+                .font(OceanFont.mono(11, weight: viewMode == .worktrees ? .bold : .regular))
+                .tracking(0.08 * 11)
+                .foregroundStyle(viewMode == .worktrees ? palette.text : palette.textMuted)
+            }
+            .padding(.horizontal, Space.s4)
+            .frame(minHeight: 36)
+            .background(palette.surface)
+            .overlay(alignment: .bottom) {
+              Rectangle()
+                .fill(viewMode == .worktrees ? palette.accent : Color.clear)
+                .frame(height: 2)
+            }
+          }
+          .buttonStyle(.plain)
+          .opacity(worktreesAvailable ? 1.0 : 0.45)
+          .help(worktreesAvailable ? "Git worktrees" : "Worktrees not available on this server")
 
           Spacer()
         }
@@ -201,17 +230,6 @@ public struct GitView: View {
                   if !hasChanges {
                     StateBlock(.empty, label: "Clean", message: "The working tree is clean. Nothing to commit.")
                   } else {
-                    HStack {
-                      SectionLabel("Changes · \(status.files.count)")
-                      Spacer()
-                    }
-                    .padding(.horizontal, Space.s5)
-                    .padding(.vertical, Space.s3)
-                    .background(palette.surfaceRaised)
-                    .overlay(alignment: .bottom) {
-                      RuleLine(.section, axis: .horizontal)
-                    }
-
                     ForEach(status.files) { file in
                       GitFileRowView(file: file, root: store.directory) {
                         onSelectFile?(file)
@@ -228,7 +246,7 @@ public struct GitView: View {
             // Commit composer bar at bottom
             CommitComposerView(store: store)
           }
-        } else {
+        } else if viewMode == .commits {
           // Commits View Mode
           if let commitHash = selectedCommitHash {
             CommitDetailView(store: store, hash: commitHash) {
@@ -239,6 +257,80 @@ public struct GitView: View {
               selectedCommitHash = commit.hash
             }
           }
+        } else {
+          // Worktrees View Mode
+          ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+              if store.worktreesLoading {
+                StateBlock(.loading, label: "Worktrees", message: "Loading worktrees.")
+              } else if let err = store.worktreesError {
+                StateBlock(.error, label: "Worktrees unavailable", message: err) {
+                  Task { await store.loadWorktrees() }
+                }
+              } else if let worktrees = store.worktrees {
+                if worktrees.isEmpty {
+                  StateBlock(.empty, label: "No worktrees", message: "No git worktrees found.")
+                } else {
+                  ForEach(worktrees) { wt in
+                    VStack(alignment: .leading, spacing: 2) {
+                      Text(wt.directory)
+                        .font(OceanFont.mono(12.5, weight: .bold))
+                        .foregroundStyle(palette.text)
+
+                      if let strategy = wt.strategy, !strategy.isEmpty {
+                        Text(strategy)
+                          .mono(11)
+                          .foregroundStyle(palette.textMuted)
+                          .lineLimit(1)
+                      }
+                    }
+                    .padding(.horizontal, Space.s5)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(palette.surface)
+                    .overlay(alignment: .bottom) {
+                      RuleLine(.row, axis: .horizontal)
+                    }
+                  }
+                }
+
+                // Inline create row
+                VStack(alignment: .leading, spacing: Space.s3) {
+                  HStack(spacing: Space.s3) {
+                    AppTextField("Worktree path", text: $newWorktreePath)
+                      .frame(maxWidth: .infinity)
+                    AppTextField("Branch (optional)", text: $newWorktreeBranch)
+                      .frame(maxWidth: 180)
+                    AppButton("Create", variant: .primary, loading: store.worktreeCreating) {
+                      let path = newWorktreePath.trimmingCharacters(in: .whitespaces)
+                      let branch = newWorktreeBranch.trimmingCharacters(in: .whitespaces)
+                      guard !path.isEmpty else { return }
+                      Task {
+                        await store.createWorktree(path: path, branch: branch.isEmpty ? nil : branch)
+                        if store.worktreeCreateError == nil {
+                          newWorktreePath = ""
+                          newWorktreeBranch = ""
+                        }
+                      }
+                    }
+                    .disabled(newWorktreePath.trimmingCharacters(in: .whitespaces).isEmpty || store.worktreeCreating)
+                  }
+
+                  if let createError = store.worktreeCreateError {
+                    Text(createError)
+                      .mono(11)
+                      .foregroundStyle(palette.accent)
+                  }
+                }
+                .padding(Space.s5)
+              } else {
+                StateBlock(.empty, label: "Not available", message: "This server does not expose worktrees.")
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+          }
+          .background(palette.surface)
+          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -280,7 +372,7 @@ private struct GitFileRowView: View {
 
         Text(file.status.rawValue.prefix(1).uppercased())
           .mono(11, weight: .bold)
-          .foregroundStyle(file.status == .added ? palette.ok : palette.accent500)
+          .foregroundStyle(file.status == .added ? palette.ok : palette.textMuted)
       }
       .padding(.horizontal, Space.s5)
       .padding(.vertical, 10)
@@ -288,6 +380,7 @@ private struct GitFileRowView: View {
       .overlay(alignment: .bottom) {
         RuleLine(.row, axis: .horizontal)
       }
+      .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
   }

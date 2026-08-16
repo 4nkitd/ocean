@@ -2072,3 +2072,472 @@ public struct McpServer: Codable, Hashable, Sendable, Identifiable {
     error = json["status"]["error"].string
   }
 }
+
+// MARK: - Plugins
+
+/// `GET /api/plugin` — plugins installed or active on the server.
+public struct PluginInfo: Codable, Hashable, Sendable, Identifiable {
+  public var id: String
+  public var name: String?
+  public var description: String?
+  public var enabled: Bool?
+
+  public init(id: String, name: String? = nil, description: String? = nil, enabled: Bool? = nil) {
+    self.id = id
+    self.name = name
+    self.description = description
+    self.enabled = enabled
+  }
+
+  public init?(json: JSONValue) {
+    guard let id = json["id"].string else { return nil }
+    self.id = id
+    name = json["name"].string
+    description = json["description"].string
+    enabled = json["enabled"].bool
+  }
+}
+
+// MARK: - Integrations
+
+public struct IntegrationFormField: Codable, Hashable, Sendable, Identifiable {
+  public var key: String
+  public var title: String?
+  public var description: String?
+  public var required: Bool?
+  public var type: String?
+  public var placeholder: String?
+  public var options: [String]?
+
+  public var id: String { key }
+
+  public init(
+    key: String, title: String? = nil, description: String? = nil,
+    required: Bool? = nil, type: String? = nil, placeholder: String? = nil,
+    options: [String]? = nil
+  ) {
+    self.key = key
+    self.title = title
+    self.description = description
+    self.required = required
+    self.type = type
+    self.placeholder = placeholder
+    self.options = options
+  }
+
+  public init?(json: JSONValue) {
+    guard let key = json["key"].string else { return nil }
+    self.key = key
+    title = json["title"].string
+    description = json["description"].string
+    required = json["required"].bool
+    type = json["type"].string
+    placeholder = json["placeholder"].string
+    options = json["options"].array.compactMap(\.string)
+  }
+}
+
+public struct IntegrationMethod: Codable, Hashable, Sendable, Identifiable {
+  public var type: String
+  public var names: [String]?
+  public var label: String?
+  public var form: [IntegrationFormField]?
+
+  public var id: String { type }
+
+  public init(
+    type: String, names: [String]? = nil, label: String? = nil,
+    form: [IntegrationFormField]? = nil
+  ) {
+    self.type = type
+    self.names = names
+    self.label = label
+    self.form = form
+  }
+
+  public init?(json: JSONValue) {
+    guard let type = json["type"].string else { return nil }
+    self.type = type
+    names = json["names"].stringArray.isEmpty ? nil : json["names"].stringArray
+    label = json["label"].string
+    let rawForm = json["form"].array
+    form = rawForm.isEmpty ? nil : rawForm.compactMap(IntegrationFormField.init(json:))
+  }
+}
+
+public struct IntegrationConnection: Codable, Hashable, Sendable, Identifiable {
+  public var type: String
+  public var id: String
+  public var label: String?
+
+  public init(type: String, id: String, label: String? = nil) {
+    self.type = type
+    self.id = id
+    self.label = label
+  }
+
+  public init?(json: JSONValue) {
+    guard let id = json["id"].string else { return nil }
+    self.id = id
+    type = json["type"].string ?? ""
+    label = json["label"].string
+  }
+}
+
+public struct IntegrationInfo: Codable, Hashable, Sendable, Identifiable {
+  public var id: String
+  public var name: String
+  public var methods: [IntegrationMethod]
+  public var connections: [IntegrationConnection]
+
+  public init(
+    id: String, name: String, methods: [IntegrationMethod] = [],
+    connections: [IntegrationConnection] = []
+  ) {
+    self.id = id
+    self.name = name
+    self.methods = methods
+    self.connections = connections
+  }
+
+  public init?(json: JSONValue) {
+    guard let id = json["id"].string else { return nil }
+    self.id = id
+    name = json["name"].string ?? id
+    methods = json["methods"].array.compactMap(IntegrationMethod.init(json:))
+    connections = json["connections"].array.compactMap(IntegrationConnection.init(json:))
+  }
+}
+
+// MARK: - PTY
+
+public struct PtySession: Codable, Hashable, Sendable, Identifiable {
+  public var id: String
+  public var title: String?
+  public var command: String?
+  public var args: [String]?
+  public var cwd: String?
+  public var status: String?
+  public var pid: Int?
+  public var exitCode: Int?
+
+  public init(
+    id: String, title: String? = nil, command: String? = nil,
+    args: [String]? = nil, cwd: String? = nil, status: String? = nil,
+    pid: Int? = nil, exitCode: Int? = nil
+  ) {
+    self.id = id
+    self.title = title
+    self.command = command
+    self.args = args
+    self.cwd = cwd
+    self.status = status
+    self.pid = pid
+    self.exitCode = exitCode
+  }
+
+  public init?(json: JSONValue) {
+    guard let id = json["id"].string ?? json["id"]["id"].string else { return nil }
+    self.id = id
+    title = json["title"].string
+    command = json["command"].string
+    args = json["args"].stringArray
+    cwd = json["cwd"].string
+    status = json["status"].string
+    pid = json["pid"].int
+    exitCode = json["exitCode"].int
+  }
+}
+
+// MARK: - Worktree
+
+public struct Worktree: Codable, Hashable, Sendable, Identifiable {
+  public var directory: String
+  public var strategy: String?
+
+  public var id: String { directory }
+
+  public init(directory: String, strategy: String? = nil) {
+    self.directory = directory
+    self.strategy = strategy
+  }
+
+  public init?(json: JSONValue) {
+    guard let directory = json["directory"].string else { return nil }
+    self.directory = directory
+    self.strategy = json["strategy"].string
+  }
+}
+
+// MARK: - Saved Permissions
+
+/// `GET /api/permission/saved` — a saved permission rule.
+public struct SavedPermission: Codable, Hashable, Sendable, Identifiable {
+  public var id: String
+  public var projectID: String
+  public var action: String
+  public var resource: String
+
+  public init(id: String, projectID: String = "global", action: String, resource: String) {
+    self.id = id
+    self.projectID = projectID
+    self.action = action
+    self.resource = resource
+  }
+
+  public init?(json: JSONValue) {
+    guard let id = json["id"].string else { return nil }
+    self.id = id
+    self.projectID = json["projectID"].string ?? "global"
+    self.action = json["action"].string ?? ""
+    self.resource = json["resource"].string ?? ""
+  }
+}
+
+// MARK: - Skills
+
+/// `GET /api/skill` — a skill installed on the server.
+public struct SkillInfo: Codable, Hashable, Sendable, Identifiable {
+  public var id: String
+  public var name: String
+  public var description: String?
+  public var slash: Bool?
+  public var autoinvoke: Bool?
+  public var location: String?
+  public var content: String?
+
+  public init(
+    id: String, name: String, description: String? = nil,
+    slash: Bool? = nil, autoinvoke: Bool? = nil,
+    location: String? = nil, content: String? = nil
+  ) {
+    self.id = id
+    self.name = name
+    self.description = description
+    self.slash = slash
+    self.autoinvoke = autoinvoke
+    self.location = location
+    self.content = content
+  }
+
+  public init?(json: JSONValue) {
+    guard let id = json["id"].string else { return nil }
+    self.id = id
+    self.name = json["name"].string ?? id
+    self.description = json["description"].string
+    self.slash = json["slash"].bool
+    self.autoinvoke = json["autoinvoke"].bool
+    self.location = json["location"].string
+    self.content = json["content"].string
+  }
+}
+
+// MARK: - References
+
+/// `GET /api/reference` — a project reference source.
+public struct ReferenceInfo: Codable, Hashable, Sendable, Identifiable {
+  public var name: String
+  public var path: String
+  public var description: String?
+  public var hidden: Bool?
+  public var source: JSONValue?
+
+  public var id: String { name }
+
+  public init(
+    name: String, path: String, description: String? = nil,
+    hidden: Bool? = nil, source: JSONValue? = nil
+  ) {
+    self.name = name
+    self.path = path
+    self.description = description
+    self.hidden = hidden
+    self.source = source
+  }
+
+  public init?(json: JSONValue) {
+    guard let name = json["name"].string else { return nil }
+    self.name = name
+    self.path = json["path"].string ?? ""
+    self.description = json["description"].string
+    self.hidden = json["hidden"].bool
+    let sourceJSON = json["source"]
+    self.source = sourceJSON.isNull ? nil : sourceJSON
+  }
+}
+
+// MARK: - Providers
+
+/// `GET /api/provider` — an AI provider configured on the server.
+public struct ProviderInfo: Codable, Hashable, Sendable, Identifiable {
+  public var id: String
+  public var integrationID: String?
+  public var name: String
+  public var disabled: Bool?
+  public var package: String?
+  public var settings: JSONValue?
+  public var headers: [String: String]?
+  public var body: JSONValue?
+
+  public init(
+    id: String, integrationID: String? = nil, name: String,
+    disabled: Bool? = nil, package: String? = nil,
+    settings: JSONValue? = nil, headers: [String: String]? = nil,
+    body: JSONValue? = nil
+  ) {
+    self.id = id
+    self.integrationID = integrationID
+    self.name = name
+    self.disabled = disabled
+    self.package = package
+    self.settings = settings
+    self.headers = headers
+    self.body = body
+  }
+
+  public init?(json: JSONValue) {
+    guard let id = json["id"].string else { return nil }
+    self.id = id
+    self.integrationID = json["integrationID"].string
+    self.name = json["name"].string ?? id
+    self.disabled = json["disabled"].bool
+    self.package = json["package"].string
+    let settingsJSON = json["settings"]
+    self.settings = settingsJSON.isNull ? nil : settingsJSON
+    if case .object(let dict) = json["headers"] {
+      var map: [String: String] = [:]
+      for (k, v) in dict {
+        if let s = v.string { map[k] = s }
+      }
+      self.headers = map.isEmpty ? nil : map
+    } else {
+      self.headers = nil
+    }
+    let bodyJSON = json["body"]
+    self.body = bodyJSON.isNull ? nil : bodyJSON
+  }
+}
+
+// MARK: - MCP Resources
+
+public struct McpResource: Codable, Hashable, Sendable, Identifiable {
+  public var server: String
+  public var name: String
+  public var uri: String
+  public var description: String?
+  public var mimeType: String?
+
+  public var id: String { "\(server):\(uri)" }
+
+  public init(
+    server: String, name: String, uri: String,
+    description: String? = nil, mimeType: String? = nil
+  ) {
+    self.server = server
+    self.name = name
+    self.uri = uri
+    self.description = description
+    self.mimeType = mimeType
+  }
+
+  public init?(json: JSONValue) {
+    guard let server = json["server"].string,
+      let uri = json["uri"].string
+    else { return nil }
+    self.server = server
+    self.name = json["name"].string ?? uri
+    self.uri = uri
+    self.description = json["description"].string
+    self.mimeType = json["mimeType"].string
+  }
+}
+
+public struct McpResourceTemplate: Codable, Hashable, Sendable, Identifiable {
+  public var server: String
+  public var name: String
+  public var uriTemplate: String
+  public var description: String?
+  public var mimeType: String?
+
+  public var id: String { "\(server):\(uriTemplate)" }
+
+  public init(
+    server: String, name: String, uriTemplate: String,
+    description: String? = nil, mimeType: String? = nil
+  ) {
+    self.server = server
+    self.name = name
+    self.uriTemplate = uriTemplate
+    self.description = description
+    self.mimeType = mimeType
+  }
+
+  public init?(json: JSONValue) {
+    guard let server = json["server"].string,
+      let template = json["uriTemplate"].string
+    else { return nil }
+    self.server = server
+    self.name = json["name"].string ?? template
+    self.uriTemplate = template
+    self.description = json["description"].string
+    self.mimeType = json["mimeType"].string
+  }
+}
+
+/// `GET /api/mcp/resource` — resources and templates from connected MCP servers.
+public struct McpResourceCatalog: Codable, Hashable, Sendable {
+  public var resources: [McpResource]
+  public var templates: [McpResourceTemplate]
+
+  public init(resources: [McpResource] = [], templates: [McpResourceTemplate] = []) {
+    self.resources = resources
+    self.templates = templates
+  }
+
+  public init(json: JSONValue) {
+    resources = json["resources"].array.compactMap(McpResource.init(json:))
+    templates = json["templates"].array.compactMap(McpResourceTemplate.init(json:))
+  }
+}
+
+// MARK: - Revert & Export
+
+public struct SessionRevertInfo: Codable, Hashable, Sendable {
+  public var messageID: String
+  public var partID: String?
+  public var snapshot: String?
+  public var files: JSONValue?
+
+  public init(messageID: String, partID: String? = nil, snapshot: String? = nil, files: JSONValue? = nil) {
+    self.messageID = messageID
+    self.partID = partID
+    self.snapshot = snapshot
+    self.files = files
+  }
+
+  public init?(json: JSONValue) {
+    guard let messageID = json["messageID"].string else { return nil }
+    self.messageID = messageID
+    self.partID = json["partID"].string
+    self.snapshot = json["snapshot"].string
+    let filesJSON = json["files"]
+    self.files = filesJSON.isNull ? nil : filesJSON
+  }
+}
+
+public struct SessionExportInfo: Codable, Hashable, Sendable {
+  public var info: Session?
+  public var messages: [MessageWithParts]
+
+  public init(info: Session? = nil, messages: [MessageWithParts] = []) {
+    self.info = info
+    self.messages = messages
+  }
+
+  public init(json: JSONValue) {
+    info = Session(json: json["info"])
+    let sessionID = info?.id ?? ""
+    messages = json["messages"].array.compactMap { toMessage($0, sessionID: sessionID) }
+  }
+}
+

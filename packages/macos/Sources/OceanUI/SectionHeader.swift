@@ -6,6 +6,7 @@ import SwiftUI
 /// puts at the far edge, and a rule underneath.
 public struct SectionHeader<Trailing: View>: View {
   private let title: String
+  private let count: String?
   private let accent: Bool
   private let trailing: () -> Trailing
 
@@ -13,10 +14,12 @@ public struct SectionHeader<Trailing: View>: View {
 
   public init(
     _ title: String,
+    count: String? = nil,
     accent: Bool = false,
     @ViewBuilder trailing: @escaping () -> Trailing
   ) {
     self.title = title
+    self.count = count
     self.accent = accent
     self.trailing = trailing
   }
@@ -24,6 +27,9 @@ public struct SectionHeader<Trailing: View>: View {
   public var body: some View {
     HStack(spacing: Space.s3) {
       SectionLabel(title, color: accent ? palette.accent : nil)
+      if let count {
+        MonoText(count, size: 10, weight: .bold, color: palette.textMuted)
+      }
       Spacer(minLength: Space.s3)
       trailing()
     }
@@ -36,7 +42,7 @@ public struct SectionHeader<Trailing: View>: View {
 }
 
 extension SectionHeader where Trailing == EmptyView {
-  public init(_ title: String, accent: Bool = false) {
-    self.init(title, accent: accent, trailing: { EmptyView() })
+  public init(_ title: String, count: String? = nil, accent: Bool = false) {
+    self.init(title, count: count, accent: accent, trailing: { EmptyView() })
   }
 }

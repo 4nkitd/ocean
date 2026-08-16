@@ -21,17 +21,20 @@ public struct ConnectView: View {
 
   @Environment(\.palette) private var palette
 
-  public init(onConnect: (() -> Void)? = nil) {
+  public init(onConnect: (() -> Void)? = nil, initialURL: String? = nil) {
     self.onConnect = onConnect
 
-    let recents = ConnectionStore.shared.recents
-    let stored = recents.first.flatMap { ConnectionStore.shared.savedServer($0.url) }
+    let targetURL = initialURL ?? ConnectionStore.shared.recents.first?.url
+    let stored = targetURL.flatMap { ConnectionStore.shared.savedServer($0) }
 
-    _url = State(initialValue: stored?.url ?? recents.first?.url ?? "http://127.0.0.1:4096")
+    _url = State(initialValue: initialURL ?? stored?.url ?? ConnectionStore.shared.recents.first?.url ?? "http://127.0.0.1:4096")
     _useBasicAuth = State(initialValue: stored?.useBasicAuth ?? true)
     _username = State(initialValue: stored?.username ?? "opencode")
     _password = State(initialValue: stored?.password ?? "")
     _remember = State(initialValue: stored?.remember ?? true)
+    if initialURL != nil {
+      _errorDismissed = State(initialValue: true)
+    }
   }
 
   public var body: some View {
@@ -121,9 +124,9 @@ public struct ConnectView: View {
 
         RuleLine(.section)
 
-        ServerSwitcher { entry in
+        ServerSwitcher(onSelectServer: { entry in
           applyRecent(entry)
-        }
+        })
       }
       .padding(Space.s6)
       .frame(maxWidth: 640)

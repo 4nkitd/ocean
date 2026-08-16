@@ -73,6 +73,12 @@ public final class GitStore {
   public private(set) var pushed: String? = nil
   public private(set) var pushError: GitFailureInfo? = nil
 
+  public private(set) var worktrees: [Worktree]? = nil
+  public private(set) var worktreesLoading: Bool = false
+  public private(set) var worktreesError: String? = nil
+  public private(set) var worktreeCreateError: String? = nil
+  public private(set) var worktreeCreating: Bool = false
+
   private var commitCache: [String: GitCommitDetail] = [:]
   private var commitDiffCache: [String: FileDiff] = [:]
 
@@ -234,6 +240,61 @@ public final class GitStore {
     commitError = nil
     pushed = nil
     pushError = nil
+  }
+
+  // MARK: - Worktrees
+
+  public func loadWorktrees() async {
+    worktreesLoading = true
+    worktreesError = nil
+    do {
+      let projects = try await client.listProjects()
+      guard let project = projects.first(where: { $0.worktree == directory || $0.directories.contains(directory) }) else {
+        worktrees = nil
+        worktreesLoading = false
+        return
+      }
+      worktrees = try await client.listWorktrees(projectID: project.id)
+    } catch let error as ApiError {
+      if error.kind == .notfound || error.status == 404 || error.status == 405 {
+        worktrees = nil
+      } else {
+        worktreesError = error.userMessage
+      }
+    } catch {
+      worktreesError = toUserMessage(error)
+    }
+    worktreesLoading = false
+  }
+
+  public func createWorktree(directory targetDirectory: String, branch: String? = nil, strategy: String = "copy") async {
+    worktreeCreating = true
+    worktreeCreateError = nil
+    do {
+      let projects = try await client.listProjects()
+      guard let project = projects.first(where: { $0.worktree == directory || $0.directories.contains(directory) }) else {
+        worktreeCreateError = "Project not found for \(directory)"
+        worktreeCreating = false
+        return
+      }
+      let name = (targetDirectory as NSString).lastPathComponent
+      try await client.createWorktree(
+        projectID: project.id,
+        strategy: strategy,
+        from: branch?.isEmpty == false ? branch : nil,
+        directory: targetDirectory,
+        name: name.isEmpty ? nil : name
+      )
+      await loadWorktrees()
+    } catch {
+      worktreeCreateError = toUserMessage(error)
+    }
+    worktreeCreating = false
+  }
+
+  public func createWorktree(path: String?, branch: String?) async {
+    guard let path, !path.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+    await createWorktree(directory: path, branch: branch)
   }
 
   // MARK: - Explanations

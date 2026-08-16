@@ -103,19 +103,30 @@ public final class SessionStore {
     updateTotalTokens()
   }
 
+  public static func extractTodos(from input: [String: JSONValue]) -> [TodoItem] {
+    extractTodos(from: JSONValue.object(input))
+  }
+
+  public static func extractTodos(from input: JSONValue) -> [TodoItem] {
+    let rawTodos = input["todos"].array
+    guard !rawTodos.isEmpty else { return [] }
+    var items: [TodoItem] = []
+    for (idx, entry) in rawTodos.enumerated() {
+      guard let content = entry["content"].string else { continue }
+      let itemID = entry["id"].string ?? "todo-\(idx)"
+      let rawStatus = entry["status"].string ?? "pending"
+      let status = TodoStatus(rawValue: rawStatus) ?? .pending
+      items.append(TodoItem(id: itemID, content: content, status: status))
+    }
+    return items
+  }
+
   private func updateTodos() {
     for message in messages.reversed() {
       for part in message.parts.reversed() {
         guard part.type == .tool, part.tool == "todowrite" else { continue }
-        if let state = part.state, let input = state.input, let rawTodos = input["todos"]?.array {
-          var items: [TodoItem] = []
-          for (idx, entry) in rawTodos.enumerated() {
-            guard let content = entry["content"].string else { continue }
-            let itemID = entry["id"].string ?? "todo-\(idx)"
-            let rawStatus = entry["status"].string ?? "pending"
-            let status = TodoStatus(rawValue: rawStatus) ?? .pending
-            items.append(TodoItem(id: itemID, content: content, status: status))
-          }
+        if let state = part.state, let input = state.input {
+          let items = Self.extractTodos(from: input)
           if !items.isEmpty {
             if self.todos != items { self.todos = items }
             return
@@ -260,6 +271,18 @@ public final class SessionStore {
       .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  public static func isOptimisticMatch(
+    draftText: String,
+    draftAttachmentsCount: Int,
+    timeCreated: Int,
+    serverText: String,
+    serverFilesCount: Int,
+    serverTimeCreated: Int
+  ) -> Bool {
+    let timeDiff = serverTimeCreated >= (timeCreated - 5000)
+    return serverText == draftText && serverFilesCount == draftAttachmentsCount && timeDiff
+  }
+
   private func reconcileOptimistic() {
     let localUsers = messages.filter { isLocalID($0.info.id) && $0.info.role == .user && $0.delivery != .failed }
     guard !localUsers.isEmpty else { return }
@@ -279,8 +302,14 @@ public final class SessionStore {
 
       let match = serverUsers.first { candidate in
         guard let cached = serverTexts[candidate.info.id] else { return false }
-        let timeDiff = cached.timeCreated >= (local.info.timeCreated - 5000)
-        return cached.text == draft && cached.filesCount == local.draftAttachments.count && timeDiff
+        return Self.isOptimisticMatch(
+          draftText: draft,
+          draftAttachmentsCount: local.draftAttachments.count,
+          timeCreated: local.info.timeCreated,
+          serverText: cached.text,
+          serverFilesCount: cached.filesCount,
+          serverTimeCreated: cached.timeCreated
+        )
       }
 
       if match != nil {

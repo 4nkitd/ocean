@@ -36,43 +36,28 @@ public struct FilesView: View {
       VStack(alignment: .leading, spacing: Space.s2) {
         if !drilledIn {
           HStack(spacing: Space.s2) {
-            Rectangle()
-              .fill(palette.accent)
-              .frame(width: 7, height: 7)
+            SectionLabel("FILES")
 
-            Text(store.client.displayHost.uppercased())
-              .label()
-              .foregroundStyle(palette.textSecondary)
-              .lineLimit(1)
+            Text("·")
+              .mono(11)
+              .foregroundStyle(palette.textDim)
+
+            Text("\(store.fileCount) files loaded")
+              .mono(11)
+              .foregroundStyle(palette.textMuted)
 
             Spacer()
 
             if let onOpenProjects {
-              Button(action: onOpenProjects) {
-                AppIcon(.grid, size: 18)
-                  .foregroundStyle(palette.textMuted)
-                  .frame(width: 32, height: 32)
+              IconButton(.grid, label: "All projects", size: 16) {
+                onOpenProjects()
               }
-              .buttonStyle(.plain)
             }
 
-            Button {
+            IconButton(.search, label: "Filter files", size: 16) {
               store.setFilterOpen(true)
-            } label: {
-              AppIcon(.search, size: 18)
-                .foregroundStyle(palette.textMuted)
-                .frame(width: 32, height: 32)
             }
-            .buttonStyle(.plain)
           }
-
-          Text(store.projectName)
-            .heading(26)
-            .foregroundStyle(palette.text)
-
-          Text(contextLine)
-            .mono(12)
-            .foregroundStyle(palette.textMuted)
         } else {
           // Drilled in breadcrumbs + Filter bar
           Breadcrumbs(store.crumbs) { crumb in
@@ -270,7 +255,7 @@ private struct FileTreeRowView: View {
         } else if row.changed > 0 {
           Text("\(row.changed)")
             .mono(11)
-            .foregroundStyle(palette.accent500)
+            .foregroundStyle(palette.textMuted)
         }
       }
       .padding(.leading, indent)
@@ -286,6 +271,7 @@ private struct FileTreeRowView: View {
             .frame(width: 2)
         }
       }
+      .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
   }

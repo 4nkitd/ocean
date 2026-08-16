@@ -192,6 +192,38 @@ public final class OpenCodeClient: Sendable {
     return unwrapEnvelope(value)
   }
 
+  private func cachedData(
+    _ path: String,
+    query: Query = [:],
+    ttl: TimeInterval,
+    optional: Bool = false
+  ) async throws -> JSONValue {
+    let key = "GET|\(path)|\(query.encoded())"
+    if let cached = APICache.shared.get(key) {
+      if cached.isEmpty { return .null }
+      let value = (try? JSONValue.parse(cached)) ?? .string(String(decoding: cached, as: UTF8.self))
+      return unwrapEnvelope(value)
+    }
+
+    guard let response = try await send(path, method: "GET", query: query, optional: optional) else {
+      return .null
+    }
+
+    APICache.shared.put(key, data: response.body, ttl: ttl)
+
+    if response.status == 204 || response.body.isEmpty { return .null }
+    let value: JSONValue
+    do {
+      value = try JSONValue.parse(response.body)
+    } catch {
+      if response.contentType.contains("application/json") {
+        throw ApiError(.parse, "Malformed JSON from \(path)", status: response.status)
+      }
+      value = .string(String(decoding: response.body, as: UTF8.self))
+    }
+    return unwrapEnvelope(value)
+  }
+
   // MARK: - Connection
 
   public func health() async throws -> ServerHealth {
@@ -204,7 +236,7 @@ public final class OpenCodeClient: Sendable {
   }
 
   public func getConfig() async throws -> [ConfigEntry] {
-    try await data("/config", timeout: 8, optional: true).array.compactMap(ConfigEntry.init(json:))
+    try await cachedData("/config", ttl: 30, optional: true).array.compactMap(ConfigEntry.init(json:))
   }
 
   /**
@@ -376,7 +408,7 @@ public final class OpenCodeClient: Sendable {
 
   /// Branch, plus ahead/behind counted against the upstream when there is one.
   public func getVcsInfo(_ directory: String) async throws -> VcsInfo? {
-    let info = try await data("/vcs", query: at(directory), optional: true)
+    let info = try await cachedData("/vcs", query: at(directory), ttl: 5, optional: true)
     if info.isNull { return nil }
 
     let tracking = try? await runShell(
@@ -404,7 +436,7 @@ public final class OpenCodeClient: Sendable {
    a list of project cards only names the branch, and pays for one request.
    */
   public func getVcsBranch(_ directory: String) async throws -> String? {
-    let info = try await data("/vcs", query: at(directory), optional: true)
+    let info = try await cachedData("/vcs", query: at(directory), ttl: 5, optional: true)
     let branch = info["branch"]["current"].string?
       .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return branch.isEmpty || branch == "HEAD" ? nil : branch
@@ -507,7 +539,7 @@ public final class OpenCodeClient: Sendable {
   // MARK: - Projects
 
   public func listProjects() async throws -> [Project] {
-    try await json("/project", optional: true)
+    try await cachedData("/project", ttl: 3, optional: true)
       .array
       .compactMap(Project.init(json:))
       // v2 keeps a `global` project for anything outside a known root. It is
@@ -539,7 +571,7 @@ public final class OpenCodeClient: Sendable {
     if let directory { query["directory"] = directory }
     query["limit"] = "200"
     query["order"] = "desc"
-    return try await data("/session", query: query)
+    return try await cachedData("/session", query: query, ttl: 3)
       .array.compactMap(Session.init(json:)).filter { !isHiddenSession($0) }
   }
 
@@ -550,7 +582,7 @@ public final class OpenCodeClient: Sendable {
 
   /// Which sessions are mid-turn right now, keyed by id.
   public func getSessionStatuses() async throws -> [String: String]? {
-    let value = try await data("/session/active", optional: true)
+    let value = try await cachedData("/session/active", ttl: 3, optional: true)
     guard let members = value.object else { return nil }
     return members.mapValues { $0.string ?? $0["type"].string ?? "busy" }
   }
@@ -590,6 +622,7 @@ public final class OpenCodeClient: Sendable {
   }
 
   public func createSession(directory: String? = nil, title: String? = nil) async throws -> Session {
+    APICache.shared.invalidateAll()
     var body: [String: JSONValue] = [:]
     if let title { body["title"] = .string(title) }
     if let directory { body["location"] = .object(["directory": .string(directory)]) }
@@ -601,7 +634,86 @@ public final class OpenCodeClient: Sendable {
   }
 
   public func deleteSession(_ id: String) async throws {
+    APICache.shared.invalidateAll()
     try await json("/session/\(pathEscape(id))", method: "DELETE")
+  }
+
+  // MARK: - Session mutations & reverts
+
+  public func renameSession(_ id: String, title: String, directory: String? = nil) async throws {
+    APICache.shared.invalidateAll()
+    try await json(
+      "/session/\(pathEscape(id))/rename",
+      method: "POST",
+      query: at(directory),
+      body: .object(["title": .string(title)])
+    )
+  }
+
+  public func forkSession(_ id: String, boundary: JSONValue? = nil, directory: String? = nil) async throws -> Session {
+    APICache.shared.invalidateAll()
+    let payloadBoundary = boundary ?? .object(["type": .string("through")])
+    let value = try await data(
+      "/session/\(pathEscape(id))/fork",
+      method: "POST",
+      query: at(directory),
+      body: .object(["boundary": payloadBoundary])
+    )
+    guard let session = Session(json: value) else {
+      throw ApiError(.server, "The server did not return the forked session")
+    }
+    return session
+  }
+
+  public func compactSession(_ id: String, directory: String? = nil) async throws {
+    APICache.shared.invalidateAll()
+    try await json(
+      "/session/\(pathEscape(id))/compact",
+      method: "POST",
+      query: at(directory)
+    )
+  }
+
+  public func exportSession(_ id: String, directory: String? = nil) async throws -> SessionExportInfo {
+    let value = try await cachedData(
+      "/session/\(pathEscape(id))/export",
+      query: at(directory),
+      ttl: 30
+    )
+    return SessionExportInfo(json: value)
+  }
+
+  public func stageRevert(
+    _ id: String, messageID: String, files: Bool? = nil, directory: String? = nil
+  ) async throws -> SessionRevertInfo? {
+    APICache.shared.invalidateAll()
+    var body: [String: JSONValue] = ["messageID": .string(messageID)]
+    if let files { body["files"] = .bool(files) }
+    let value = try await data(
+      "/session/\(pathEscape(id))/revert/stage",
+      method: "POST",
+      query: at(directory),
+      body: .object(body)
+    )
+    return SessionRevertInfo(json: value)
+  }
+
+  public func commitRevert(_ id: String, directory: String? = nil) async throws {
+    APICache.shared.invalidateAll()
+    try await json(
+      "/session/\(pathEscape(id))/revert/commit",
+      method: "POST",
+      query: at(directory)
+    )
+  }
+
+  public func clearRevert(_ id: String, directory: String? = nil) async throws {
+    APICache.shared.invalidateAll()
+    try await json(
+      "/session/\(pathEscape(id))/revert/clear",
+      method: "POST",
+      query: at(directory)
+    )
   }
 
   public func listMessages(_ sessionID: String) async throws -> [MessageWithParts] {
@@ -665,7 +777,7 @@ public final class OpenCodeClient: Sendable {
 
   /// The saved prompts this project can run, which is what `/` offers.
   public func listCommands(_ directory: String? = nil) async throws -> [CommandInfo] {
-    try await data("/command", query: at(directory), optional: true)
+    try await cachedData("/command", query: at(directory), ttl: 30, optional: true)
       .array.compactMap(CommandInfo.init(json:))
   }
 
@@ -722,7 +834,7 @@ public final class OpenCodeClient: Sendable {
     var query = at(root)
     let relative = relativeTo(root, path)
     query["path"] = relative.isEmpty ? "." : relative
-    let value = try await data("/fs/list", query: query, optional: true)
+    let value = try await cachedData("/fs/list", query: query, ttl: 3, optional: true)
     return value.array.compactMap { entry -> FileNode? in
       guard let raw = entry["path"].string else { return nil }
       let trimmed = trimTrailingSlashes(raw)
@@ -747,15 +859,10 @@ public final class OpenCodeClient: Sendable {
     let relative = relativeTo(root, path)
     let encoded = relative.split(separator: "/").map { pathEscape(String($0)) }.joined(
       separator: "/")
-    guard let response = try await send("/fs/read/\(encoded)", query: at(root)) else {
-      return FileContent(content: "")
-    }
-    let body = String(decoding: response.body, as: UTF8.self)
-    guard response.contentType.contains("application/json"),
-      let value = try? JSONValue.parse(response.body)
-    else { return FileContent(content: body) }
+    let value = try await cachedData("/fs/read/\(encoded)", query: at(root), ttl: 2, optional: true)
+    if value.isNull { return FileContent(content: "") }
     if case .string(let text) = value { return FileContent(content: text) }
-    return FileContent(content: unwrapEnvelope(value)["content"].string ?? body)
+    return FileContent(content: unwrapEnvelope(value)["content"].string ?? "")
   }
 
   /// Working-tree changes, in the client's `FileStatus` shape (repo-relative).
@@ -773,7 +880,7 @@ public final class OpenCodeClient: Sendable {
     params["query"] = query
     params["type"] = "file"
     params["limit"] = "100"
-    let value = try await data("/fs/find", query: params, optional: true)
+    let value = try await cachedData("/fs/find", query: params, ttl: 5, optional: true)
     return value.array.compactMap { $0["path"].string }.map { absoluteIn(directory, $0) }
   }
 
@@ -781,13 +888,13 @@ public final class OpenCodeClient: Sendable {
 
   /// The agents this server can run a session under.
   public func listAgents(_ directory: String? = nil) async throws -> [AgentInfo] {
-    try await data("/agent", query: at(directory), optional: true)
+    try await cachedData("/agent", query: at(directory), ttl: 30, optional: true)
       .array.compactMap(AgentInfo.init(json:)).filter { !$0.hidden }
   }
 
   /// The models this server can run.
   public func listModels(_ directory: String? = nil) async throws -> [ModelInfo] {
-    try await data("/model", query: at(directory), optional: true)
+    try await cachedData("/model", query: at(directory), ttl: 30, optional: true)
       .array
       .filter { !$0["disabled"].isTrue }
       .compactMap(ModelInfo.init(json:))
@@ -926,7 +1033,7 @@ public final class OpenCodeClient: Sendable {
    "this build cannot do it" rather than "none configured".
    */
   public func listMcp(_ directory: String? = nil) async throws -> [McpServer]? {
-    let value = try await data("/mcp", query: at(directory), optional: true)
+    let value = try await cachedData("/mcp", query: at(directory), ttl: 5, optional: true)
     if value.isNull { return nil }
     return value.array.compactMap(McpServer.init(json:)).sorted {
       $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -948,6 +1055,221 @@ public final class OpenCodeClient: Sendable {
       // Connecting a remote server can take a while to hand-shake.
       timeout: 60
     )
+  }
+
+  public func addMcp(
+    _ name: String,
+    type: String = "local",
+    command: [String],
+    cwd: String? = nil,
+    environment: [String: String] = [:],
+    disabled: Bool = false,
+    codemode: Bool = false,
+    directory: String? = nil
+  ) async throws {
+    var config: [String: JSONValue] = [
+      "type": .string(type),
+      "command": .array(command.map { .string($0) }),
+      "disabled": .bool(disabled),
+      "codemode": .bool(codemode),
+    ]
+    if let cwd {
+      config["cwd"] = .string(cwd)
+    }
+    if !environment.isEmpty {
+      var envObj: [String: JSONValue] = [:]
+      for (k, v) in environment {
+        envObj[k] = .string(v)
+      }
+      config["environment"] = .object(envObj)
+    }
+
+    let payload: JSONValue = .object([
+      "config": .object(config)
+    ])
+
+    let req = McpRequestBuilder.addRequest(name: name)
+    try await json(
+      req.path,
+      method: req.method,
+      query: at(directory),
+      body: payload
+    )
+    APICache.shared.invalidateAll()
+  }
+
+  public func removeMcp(_ name: String, directory: String? = nil) async throws {
+    APICache.shared.invalidateAll()
+    let req = McpRequestBuilder.removeRequest(name: name)
+    try await json(
+      req.path,
+      method: req.method,
+      query: at(directory)
+    )
+  }
+
+  public func listMcpResources(directory: String? = nil) async throws -> McpResourceCatalog? {
+    let value = try await cachedData("/mcp/resource", query: at(directory), ttl: 10, optional: true)
+    if value.isNull { return nil }
+    return McpResourceCatalog(json: value)
+  }
+
+  // MARK: - Saved Permissions
+
+  public func listSavedPermissions(directory: String? = nil) async throws -> [SavedPermission] {
+    try await cachedData("/permission/saved", query: at(directory), ttl: 10, optional: true)
+      .array.compactMap(SavedPermission.init(json:))
+  }
+
+  public func removeSavedPermission(_ id: String, directory: String? = nil) async throws {
+    APICache.shared.invalidateAll()
+    try await json(
+      "/permission/saved/\(pathEscape(id))",
+      method: "DELETE",
+      query: at(directory)
+    )
+  }
+
+  // MARK: - Skills
+
+  public func listSkills(directory: String? = nil) async throws -> [SkillInfo] {
+    try await cachedData("/skill", query: at(directory), ttl: 30, optional: true)
+      .array.compactMap(SkillInfo.init(json:))
+  }
+
+  public func activateSkill(sessionID: String, skillID: String, directory: String? = nil) async throws {
+    APICache.shared.invalidateAll()
+    try await json(
+      "/session/\(pathEscape(sessionID))/skill",
+      method: "POST",
+      query: at(directory),
+      body: .object(["skill": .string(skillID)])
+    )
+  }
+
+  // MARK: - References
+
+  public func listReferences(directory: String? = nil) async throws -> [ReferenceInfo] {
+    try await cachedData("/reference", query: at(directory), ttl: 30, optional: true)
+      .array.compactMap(ReferenceInfo.init(json:))
+  }
+
+  // MARK: - Providers
+
+  public func listProviders(directory: String? = nil) async throws -> [ProviderInfo] {
+    try await cachedData("/provider", query: at(directory), ttl: 60, optional: true)
+      .array.compactMap(ProviderInfo.init(json:))
+  }
+
+  public func getProvider(_ id: String, directory: String? = nil) async throws -> ProviderInfo? {
+    let value = try await cachedData(
+      "/provider/\(pathEscape(id))", query: at(directory), ttl: 60, optional: true)
+    if value.isNull { return nil }
+    return ProviderInfo(json: value)
+  }
+
+  // MARK: - Plugins, Integrations, PTY, Worktrees
+
+  public func listPlugins(_ directory: String? = nil) async throws -> [PluginInfo]? {
+    let value = try await cachedData("/plugin", query: at(directory), ttl: 10, optional: true)
+    if value.isNull { return nil }
+    return value.array.compactMap(PluginInfo.init(json:))
+  }
+
+  public func listIntegrations(_ directory: String? = nil) async throws -> [IntegrationInfo]? {
+    let value = try await cachedData("/integration", query: at(directory), ttl: 30, optional: true)
+    if value.isNull { return nil }
+    return value.array.compactMap(IntegrationInfo.init(json:))
+  }
+
+  public func listPtySessions(_ directory: String? = nil) async throws -> [PtySession] {
+    let value = try await cachedData("/pty", query: at(directory), ttl: 5, optional: true)
+    if value.isNull { return [] }
+    return value.array.compactMap(PtySession.init(json:))
+  }
+
+  public func listWorktrees(projectID: String) async throws -> [Worktree]? {
+    let value = try await json(WorktreeRequestBuilder.listPath(projectID: projectID), optional: true)
+    return WorktreeRequestBuilder.parseListResponse(value)
+  }
+
+  public func createWorktree(
+    projectID: String,
+    strategy: String = "copy",
+    from: String? = nil,
+    directory: String,
+    name: String? = nil
+  ) async throws {
+    let path = WorktreeRequestBuilder.createPath(projectID: projectID)
+    let body = WorktreeRequestBuilder.createBody(strategy: strategy, from: from, directory: directory, name: name)
+
+    do {
+      let value = try await json(
+        path,
+        method: "POST",
+        body: body
+      )
+
+      if let error = WorktreeRequestBuilder.error(from: value) {
+        throw error
+      }
+    } catch let error as ApiError {
+      if error.kind == .server, let status = error.status, status >= 400 {
+        throw ApiError(.server, error.message, status: status, url: error.url)
+      }
+      throw error
+    }
+  }
+}
+
+enum WorktreeRequestBuilder {
+  static func listPath(projectID: String) -> String {
+    "/worktree/\(pathEscape(projectID))"
+  }
+
+  static func parseListResponse(_ value: JSONValue) -> [Worktree]? {
+    if value.isNull { return nil }
+    guard case .array(let items) = value else { return nil }
+    return items.compactMap(Worktree.init(json:))
+  }
+
+  static func createPath(projectID: String) -> String {
+    "/worktree/\(pathEscape(projectID))"
+  }
+
+  static func createBody(
+    strategy: String = "copy",
+    from: String? = nil,
+    directory: String,
+    name: String? = nil
+  ) -> JSONValue {
+    var bodyObj: [String: JSONValue] = [
+      "strategy": .string(strategy),
+      "directory": .string(directory)
+    ]
+    if let from, !from.isEmpty {
+      bodyObj["from"] = .string(from)
+    }
+    if let name, !name.isEmpty {
+      bodyObj["name"] = .string(name)
+    }
+    return .object(bodyObj)
+  }
+
+  static func error(from value: JSONValue) -> ApiError? {
+    guard value["name"].string == "WorktreeError" else { return nil }
+    let message = value["data"]["message"].string ?? value["message"].string ?? "Worktree creation failed"
+    return ApiError(.server, message)
+  }
+}
+
+enum McpRequestBuilder {
+  static func addRequest(name: String) -> (path: String, method: String) {
+    (path: "/mcp/\(pathEscape(name))", method: "PUT")
+  }
+
+  static func removeRequest(name: String) -> (path: String, method: String) {
+    (path: "/mcp/\(pathEscape(name))", method: "DELETE")
   }
 }
 

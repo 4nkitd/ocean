@@ -22,6 +22,11 @@ public struct Keychain: Sendable {
     }
   }
 
+  public init(service: String) {
+    let tmpDir = FileManager.default.temporaryDirectory
+    self.fileURL = tmpDir.appendingPathComponent("keychain_\(service).json")
+  }
+
   private func readStore() -> [String: ServerCredentials] {
     guard let data = try? Data(contentsOf: fileURL),
           let dict = try? JSONDecoder().decode([String: ServerCredentials].self, from: data)
@@ -79,5 +84,9 @@ public struct Keychain: Sendable {
   /// Wipe every entry in the file.
   public func wipeAll() {
     try? FileManager.default.removeItem(at: fileURL)
+  }
+
+  public func removeAll() {
+    wipeAll()
   }
 }

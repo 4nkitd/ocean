@@ -17,7 +17,7 @@ public struct CommitLogView: View {
     VStack(spacing: 0) {
       // Header
       HStack {
-        SectionLabel("Recent commits")
+        SectionLabel("RECENT COMMITS")
 
         if !store.commits.isEmpty {
           Text("· \(store.commits.count)")
@@ -27,14 +27,9 @@ public struct CommitLogView: View {
 
         Spacer()
 
-        Button {
+        IconButton(.refresh, label: "Refresh commits", size: 15) {
           Task { await store.refreshCommits() }
-        } label: {
-          AppIcon(.refresh, size: 15)
-            .foregroundStyle(palette.textMuted)
-            .frame(width: 32, height: 32)
         }
-        .buttonStyle(.plain)
         .disabled(store.commitsLoading)
       }
       .padding(.horizontal, Space.s5)
@@ -61,24 +56,25 @@ public struct CommitLogView: View {
                 onSelectCommit?(commit)
               } label: {
                 VStack(alignment: .leading, spacing: 4) {
-                  HStack(alignment: .top, spacing: Space.s2) {
+                  HStack(alignment: .center, spacing: Space.s2) {
                     Text(commit.subject)
-                      .bodyText(14)
+                      .bodyText(13.5)
                       .foregroundStyle(palette.text)
-                      .lineLimit(2)
-                      .multilineTextAlignment(.leading)
+                      .lineLimit(1)
+                      .truncationMode(.tail)
 
                     Spacer()
 
                     Text(commit.shortHash)
                       .mono(11)
-                      .foregroundStyle(palette.accent400)
+                      .foregroundStyle(palette.textMuted)
                   }
 
                   HStack(spacing: Space.s2) {
                     Text(commit.author)
                       .mono(11)
                       .foregroundStyle(palette.textMuted)
+                      .lineLimit(1)
 
                     Text("·")
                       .mono(11)
@@ -87,18 +83,21 @@ public struct CommitLogView: View {
                     Text(Formatters.relativeTime(commit.date))
                       .mono(11)
                       .foregroundStyle(palette.textMuted)
+                      .lineLimit(1)
 
                     if !commit.refs.isEmpty {
                       Spacer()
-                      ForEach(commit.refs, id: \.self) { ref in
+                      ForEach(commit.refs.prefix(2), id: \.self) { ref in
                         Chip(ref, tone: .neutral, uppercased: false)
                       }
                     }
                   }
                 }
                 .padding(.horizontal, Space.s5)
-                .padding(.vertical, 12)
+                .padding(.vertical, 10)
+                .frame(height: 54)
                 .background(palette.surface)
+                .contentShape(Rectangle())
               }
               .buttonStyle(.plain)
               .overlay(alignment: .bottom) {

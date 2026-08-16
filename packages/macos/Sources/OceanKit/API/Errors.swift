@@ -53,6 +53,9 @@ public struct ApiError: Error, Hashable, Sendable, CustomStringConvertible {
     case .notfound:
       return "Nothing answers the v2 API there. Check the address, or turn the relay on if this app is not on localhost."
     case .server:
+      if status == nil && !message.isEmpty {
+        return message
+      }
       return status.map { "The server returned an error (\($0))." } ?? "The server returned an error."
     case .timeout:
       return "The server did not respond in time."

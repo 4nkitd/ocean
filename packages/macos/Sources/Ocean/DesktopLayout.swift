@@ -12,7 +12,7 @@ import SwiftUI
 public enum WorkspaceTab: Identifiable, Hashable {
   case chat
   case projects
-  case server
+  case settings
   case connect
   case file(path: String)
   case commit(hash: String)
@@ -21,7 +21,7 @@ public enum WorkspaceTab: Identifiable, Hashable {
     switch self {
     case .chat: return "chat"
     case .projects: return "projects"
-    case .server: return "server"
+    case .settings: return "settings"
     case .connect: return "connect"
     case .file(let path): return "file:\(path)"
     case .commit(let hash): return "commit:\(hash)"
@@ -32,7 +32,7 @@ public enum WorkspaceTab: Identifiable, Hashable {
     switch self {
     case .chat: return "Chat"
     case .projects: return "Projects"
-    case .server: return "Server"
+    case .settings: return "Settings"
     case .connect: return "Connect"
     case .file(let path):
       return (path as NSString).lastPathComponent
@@ -65,6 +65,7 @@ public enum WorkspaceRightTab: String, CaseIterable, Identifiable {
 public struct DesktopLayout: View {
   @Environment(ConnectionStore.self) private var connectionStore
   @Environment(\.palette) private var palette
+  @EnvironmentObject private var deepLinkHandler: DeepLinkHandler
 
   @State private var directory: String = ""
   @State private var currentSessionId: String = ""
@@ -78,6 +79,8 @@ public struct DesktopLayout: View {
   @State private var filesStore: FilesStore?
   @State private var gitStore: GitStore?
   @State private var terminalStore: TerminalStore?
+  @State private var mcpStore = McpStore()
+  @State private var pendingConnectURL: String? = nil
 
   @State private var sessionStores: [String: SessionStore] = [:]
   @State private var sessionOrder: [String] = []
@@ -85,6 +88,10 @@ public struct DesktopLayout: View {
   @State private var filesOrder: [String] = []
 
   public init() {}
+
+  private var visibleRightTabs: [WorkspaceRightTab] {
+    directory.isEmpty ? [.mcp, .active] : WorkspaceRightTab.allCases
+  }
 
   public var body: some View {
     VStack(spacing: 0) {
@@ -101,6 +108,9 @@ public struct DesktopLayout: View {
     }
     .onChange(of: directory) { _, _ in
       rebuildStores()
+      if !visibleRightTabs.contains(rightTab) {
+        rightTab = .active
+      }
     }
     .onChange(of: currentSessionId) { _, nextId in
       if !nextId.isEmpty {
@@ -124,34 +134,45 @@ public struct DesktopLayout: View {
       guard connected else { return }
       Task { await initializeDirectoryAndSessions() }
     }
+    .onReceive(deepLinkHandler.$pending) { pending in
+      guard let link = pending else { return }
+      _ = deepLinkHandler.consume()
+      applyDeepLink(link)
+    }
   }
 
   private func initializeDirectoryAndSessions() async {
     guard let client = connectionStore.client else { return }
-    do {
-      let allSessions = try await client.listSessions(nil)
-      if let latest = allSessions.max(by: { sessionTimestamp($0) < sessionTimestamp($1) }),
-        let sessionDirectory = latest.directory,
-        !sessionDirectory.isEmpty
-      {
-        directory = sessionDirectory
-        currentSessionId = latest.id
-      }
+    let sessionsTask = Task { try? await client.listSessions(nil) }
+    let projectsTask = Task { try? await client.listProjects() }
+    let activeTask = Task { try? await client.listActiveSessions() }
 
-      let projects = try await client.listProjects()
-      if directory.isEmpty, let activeProj = projects.first(where: { $0.worktree != "/" }) {
-        directory = activeProj.worktree
-      } else if directory.isEmpty,
-        let activeSession = try await client.listActiveSessions().first,
-        let dir = activeSession.directory
-      {
-        directory = dir
-      }
-    } catch {
-      print("Error fetching initial project directory: \(error)")
+    let allSessions = (await sessionsTask.value) ?? []
+    let projects = (await projectsTask.value) ?? []
+    let activeSessions = (await activeTask.value) ?? []
+
+    if let latest = allSessions.max(by: { sessionTimestamp($0) < sessionTimestamp($1) }),
+      let sessionDirectory = latest.directory,
+      !sessionDirectory.isEmpty
+    {
+      directory = sessionDirectory
+      currentSessionId = latest.id
     }
+
+    if directory.isEmpty, let activeProj = projects.first(where: { $0.worktree != "/" }) {
+      directory = activeProj.worktree
+    } else if directory.isEmpty,
+      let activeSession = activeSessions.first,
+      let dir = activeSession.directory
+    {
+      directory = dir
+    }
+
     rebuildStores()
     await loadSessions()
+    if !visibleRightTabs.contains(rightTab) {
+      rightTab = .active
+    }
   }
 
   private func rebuildStores() {
@@ -181,11 +202,12 @@ public struct DesktopLayout: View {
         .frame(minWidth: 220, idealWidth: 250, maxWidth: 340)
 
       VStack(spacing: 0) {
-        centerHeader
-        RuleLine(.section)
         centerTabStrip
-          .fixedSize(horizontal: false, vertical: true)
         RuleLine(.section)
+        if !(activeTab == .projects || activeTab == .settings) {
+          centerHeader
+          RuleLine(.section)
+        }
 
         ZStack(alignment: .bottom) {
           centerBody
@@ -208,6 +230,12 @@ public struct DesktopLayout: View {
         .frame(minWidth: 260, idealWidth: 320, maxWidth: 430)
     }
     .background(palette.bg)
+    .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ocean.openSettings"))) { _ in
+      openSettingsTab()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ocean.openChat"))) { _ in
+      activeTab = .chat
+    }
   }
 
   // MARK: - Left Sidebar
@@ -317,13 +345,13 @@ public struct DesktopLayout: View {
 
       // Footer: Server Switcher Pill
       Button {
-        openServerTab()
+        openSettingsTab()
       } label: {
         HStack(spacing: Space.s2) {
           StatusDot(.ok, size: 6)
           MonoText(connectionStore.serverLabel, size: 11, weight: .medium)
           Spacer()
-          AppIcon(.chevronUpDown, size: 11)
+          AppIcon(.gear, size: 12)
             .foregroundStyle(palette.textMuted)
         }
         .padding(.horizontal, Space.s3)
@@ -402,7 +430,7 @@ public struct DesktopLayout: View {
                   AppIcon(.chat, size: 14)
                 } else if case .projects = tab {
                   AppIcon(.grid, size: 14)
-                } else if case .server = tab {
+                } else if case .settings = tab {
                   AppIcon(.gear, size: 14)
                 } else if case .connect = tab {
                   AppIcon(.arrowRight, size: 14)
@@ -423,8 +451,8 @@ public struct DesktopLayout: View {
             }
           }
           .padding(.horizontal, Space.s3)
-          .padding(.vertical, Space.s2)
-          .background(activeTab == tab ? palette.surface : palette.surfaceSunken)
+          .frame(maxHeight: .infinity)
+          .background(activeTab == tab ? palette.surfaceRaised : palette.surfaceSunken)
           .overlay(
             Rectangle()
               .fill(activeTab == tab ? palette.accent : Color.clear)
@@ -436,6 +464,7 @@ public struct DesktopLayout: View {
         }
       }
     }
+    .frame(height: 45, alignment: .leading)
     .background(palette.surfaceSunken)
   }
 
@@ -450,18 +479,25 @@ public struct DesktopLayout: View {
           activeTab = .chat
           Task { await loadSessions() }
         },
-        onOpenServerSettings: openServerTab
+        onOpenServerSettings: openSettingsTab
       )
-    case .server:
-      ServerView(
-        onAttachDifferent: openConnectTab,
-        onDetach: { activeTab = .connect }
+    case .settings:
+      SettingsView(
+        directory: directory,
+        onAttachDifferent: { openConnectTab() },
+        onDetach: { activeTab = .connect },
+        onNeedCredentials: { url in
+          openConnectTab(url: url)
+        }
       )
     case .connect:
-      ConnectView(onConnect: {
-        activeTab = .chat
-        Task { await initializeDirectoryAndSessions() }
-      })
+      ConnectView(
+        onConnect: {
+          activeTab = .chat
+          Task { await initializeDirectoryAndSessions() }
+        },
+        initialURL: pendingConnectURL
+      )
     case .chat:
       if let store = sessionStore {
         SessionView(store: store) { path in
@@ -492,7 +528,7 @@ public struct DesktopLayout: View {
   private var workspaceRightPanel: some View {
     VStack(alignment: .leading, spacing: 0) {
       workspaceRightHeader
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(height: 45)
       RuleLine(.section)
       workspaceRightContent
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -503,11 +539,12 @@ public struct DesktopLayout: View {
 
   private var workspaceRightHeader: some View {
     HStack(spacing: 0) {
-      ForEach(WorkspaceRightTab.allCases) { tab in
+      ForEach(visibleRightTabs) { tab in
         rightTabButton(for: tab)
         RuleLine(.row, axis: .vertical)
       }
     }
+    .frame(height: 45)
     .background(palette.surfaceSunken)
   }
 
@@ -516,15 +553,14 @@ public struct DesktopLayout: View {
     return Button {
       rightTab = tab
     } label: {
-      VStack(spacing: 4) {
+      VStack(spacing: 3) {
         AppIcon(tab.icon, size: 14)
           .foregroundStyle(isActive ? palette.text : palette.textMuted)
         Text(tab.rawValue.uppercased())
           .mono(9, weight: isActive ? .bold : .medium)
           .foregroundStyle(isActive ? palette.text : palette.textMuted)
       }
-      .frame(maxWidth: .infinity)
-      .padding(.vertical, Space.s2)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(isActive ? palette.surface : palette.surfaceSunken)
       .overlay(alignment: .bottom) {
         Rectangle()
@@ -551,16 +587,40 @@ public struct DesktopLayout: View {
         }
       }
     case .plan:
-      if let todos = sessionStore?.todos, !todos.isEmpty {
-        TodoDock(todos: todos)
-      } else {
-        StateBlock(.empty, label: "Plan", message: "No active tasks in current plan.")
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      VStack(alignment: .leading, spacing: 0) {
+        SectionHeader("PLAN")
+        if let todos = sessionStore?.todos, !todos.isEmpty {
+          TodoDock(todos: todos)
+        } else {
+          StateBlock(.empty, label: "No active tasks", message: "No tasks in current session plan.")
+            .padding(Space.s4)
+        }
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     case .mcp:
-      McpList(servers: sessionStore?.mcpServers, loading: sessionStore?.mcpLoading ?? false, error: sessionStore?.mcpError) { server, enabled in
-        sessionStore?.toggleMcp(server: server, enabled: enabled)
+      VStack(alignment: .leading, spacing: 0) {
+        SectionHeader("MCP SERVERS", count: mcpStore.servers.map { "\($0.count)" })
+        ScrollView {
+          McpList(
+            servers: mcpStore.servers,
+            loading: mcpStore.loading,
+            error: mcpStore.error,
+            actionError: mcpStore.actionError,
+            pending: mcpStore.pending,
+            onToggle: { server, enabled in
+              mcpStore.toggle(server, enabled: enabled, directory: directory)
+            },
+            onAdd: { name, cmd in
+              mcpStore.add(name: name, command: shellSplit(cmd), directory: directory)
+            },
+            onRemove: { server in
+              mcpStore.remove(server, directory: directory)
+            }
+          )
+        }
       }
+      .onAppear { mcpStore.load(directory: directory) }
+      .onChange(of: directory) { _, nextDir in mcpStore.load(directory: nextDir) }
     case .active:
       ActiveView { dir, sessID in
         currentSessionId = sessID
@@ -626,6 +686,30 @@ public struct DesktopLayout: View {
     }
   }
 
+  private func applyDeepLink(_ link: DeepLink) {
+    switch link {
+    case .project(let path):
+      if directory != path {
+        directory = path
+      }
+      activeTab = .chat
+      Task { await loadSessions() }
+    case .session(let id, let path):
+      if directory != path {
+        directory = path
+      }
+      currentSessionId = id
+      activeTab = .chat
+      Task { await loadSessions() }
+    case .settings:
+      openSettingsTab()
+    case .projects:
+      openProjectsTab()
+    case .active:
+      rightTab = .active
+    }
+  }
+
   private func openFileTab(_ path: String) {
     let tab = WorkspaceTab.file(path: path)
     if !openTabs.contains(tab) {
@@ -638,11 +722,14 @@ public struct DesktopLayout: View {
     openTab(.projects)
   }
 
-  private func openServerTab() {
-    openTab(.server)
+  private func openSettingsTab() {
+    openTab(.settings)
   }
 
-  private func openConnectTab() {
+  private func openConnectTab(url: String? = nil) {
+    if let url {
+      pendingConnectURL = url
+    }
     openTab(.connect)
   }
 
@@ -695,6 +782,40 @@ public struct DesktopLayout: View {
     }
     return "\(count)"
   }
+
+  private func shellSplit(_ input: String) -> [String] {
+    var results: [String] = []
+    var current = ""
+    var inSingleQuote = false
+    var inDoubleQuote = false
+    var escaped = false
+
+    for char in input {
+      if escaped {
+        current.append(char)
+        escaped = false
+      } else if char == "\\" && !inSingleQuote {
+        escaped = true
+      } else if char == "'" && !inDoubleQuote {
+        inSingleQuote.toggle()
+      } else if char == "\"" && !inSingleQuote {
+        inDoubleQuote.toggle()
+      } else if char.isWhitespace && !inSingleQuote && !inDoubleQuote {
+        if !current.isEmpty {
+          results.append(current)
+          current = ""
+        }
+      } else {
+        current.append(char)
+      }
+    }
+    if !current.isEmpty {
+      results.append(current)
+    }
+    return results.isEmpty && !input.trimmingCharacters(in: .whitespaces).isEmpty
+      ? input.split(separator: " ").map(String.init)
+      : (results.isEmpty ? [input] : results)
+  }
 }
 
 struct DesktopCenterHeaderView: View {
@@ -745,12 +866,10 @@ struct DesktopCenterHeaderView: View {
 
   private var content: (title: String, subtitle: String) {
     switch activeTab {
-    case .projects:
-      return ("Projects", serverLabel)
-    case .server:
-      return ("Server", serverLabel)
     case .connect:
       return ("Connect to a server", "Credentials are stored in a JSON configuration file when you choose Remember")
+    case .projects, .settings:
+      return ("", "")
     case .chat, .file, .commit:
       let title = sessionStore?.title ?? currentSession?.title ?? (currentSessionId.isEmpty ? "No active session" : currentSessionId)
       let model = sessionStore?.model?.modelID ?? currentSession?.model?.id ?? currentSession?.model?.modelID ?? "gemini-3.7-flash-medium"

@@ -90,7 +90,9 @@ let package = Package(
     ),
     .testTarget(
       name: "OceanKitTests",
-      dependencies: ["OceanKit"],
+      dependencies: [
+        "OceanKit", "OceanSession", "OceanFiles", "OceanGit", "OceanProjects",
+      ],
       swiftSettings: testSwiftSettings,
       linkerSettings: testLinkerSettings
     ),

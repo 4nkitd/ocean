@@ -46,20 +46,25 @@ public struct ProjectsView: View {
               message: "Nothing here matches “\(store.query)”."
             )
           } else {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14)], spacing: 14) {
+            LazyVStack(spacing: 0) {
               ForEach(Array(store.filteredProjects.enumerated()), id: \.element.id) { index, project in
-                ProjectCard(
-                  project: project,
-                  active: project.id == store.activeProjectId,
-                  reordering: store.reordering,
-                  canMoveUp: index > 0,
-                  canMoveDown: index < store.filteredProjects.count - 1,
-                  onSelect: { onSelectProject(project.worktree) },
-                  onMove: { delta in store.move(project.id, delta: delta) },
-                  onFavourite: { store.toggleFavourite(project.id) }
-                )
+                VStack(spacing: 0) {
+                  ProjectCard(
+                    project: project,
+                    active: project.id == store.activeProjectId,
+                    reordering: store.reordering,
+                    canMoveUp: index > 0,
+                    canMoveDown: index < store.filteredProjects.count - 1,
+                    onSelect: { onSelectProject(project.worktree) },
+                    onMove: { delta in store.move(project.id, delta: delta) },
+                    onFavourite: { store.toggleFavourite(project.id) }
+                  )
+                  RuleLine(.row)
+                }
               }
             }
+            .background(palette.surface)
+            .overlay(Rectangle().strokeBorder(palette.rule, lineWidth: RuleWidth.section))
           }
         }
         .padding(Space.s6)
@@ -68,7 +73,9 @@ public struct ProjectsView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(palette.bg)
     .task {
-      await store.refresh()
+      if store.projects.isEmpty {
+        await store.refresh()
+      }
     }
   }
 
@@ -85,8 +92,13 @@ public struct ProjectsView: View {
             .foregroundStyle(palette.textMuted)
         }
         Spacer()
-        IconButton(.gear, label: "Server settings", size: 18) {
-          onOpenServerSettings()
+        HStack(spacing: Space.s2) {
+          IconButton(.refresh, label: "Refresh projects", size: 18) {
+            Task { await store.refresh() }
+          }
+          IconButton(.gear, label: "Server settings", size: 18) {
+            onOpenServerSettings()
+          }
         }
       }
 
@@ -96,11 +108,9 @@ public struct ProjectsView: View {
             .font(OceanFont.body(30, weight: .bold))
             .foregroundStyle(palette.text)
 
-          if !store.loading && store.error == nil {
-            Text(store.summary)
-              .mono(11)
-              .foregroundStyle(palette.textMuted)
-          }
+          Text(store.loading ? "Asking the server…" : store.summary)
+            .mono(11)
+            .foregroundStyle(palette.textMuted)
         }
 
         Spacer()
@@ -117,20 +127,19 @@ public struct ProjectsView: View {
       }
 
       HStack(spacing: Space.s2) {
-        if store.projects.count > 3 {
-          HStack(spacing: Space.s2) {
-            AppIcon(.search, size: 14)
-              .foregroundStyle(palette.textDim)
-            TextField("Filter projects", text: $store.query)
-              .textFieldStyle(.plain)
-              .font(OceanFont.mono(12.5))
-              .foregroundStyle(palette.text)
-          }
-          .padding(.horizontal, Space.s3)
-          .padding(.vertical, 8)
-          .background(palette.surfaceRaised)
-          .overlay(Rectangle().strokeBorder(palette.rule, lineWidth: RuleWidth.section))
+        HStack(spacing: Space.s2) {
+          AppIcon(.search, size: 14)
+            .foregroundStyle(palette.textDim)
+          TextField("Filter projects", text: $store.query)
+            .textFieldStyle(.plain)
+            .font(OceanFont.mono(12.5))
+            .foregroundStyle(palette.text)
+            .disabled(store.loading)
         }
+        .padding(.horizontal, Space.s3)
+        .padding(.vertical, 8)
+        .background(palette.surfaceRaised)
+        .overlay(Rectangle().strokeBorder(palette.rule, lineWidth: RuleWidth.section))
 
         AppButton(
            "Add project",
@@ -138,6 +147,7 @@ public struct ProjectsView: View {
            icon: .plus,
            action: openAddProjectPanel
          )
+         .disabled(store.loading)
       }
     }
     .padding(Space.s6)

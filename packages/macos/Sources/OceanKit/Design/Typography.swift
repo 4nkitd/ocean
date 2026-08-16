@@ -25,10 +25,10 @@ public enum OceanFont {
     .system(size: size, weight: weight, design: .monospaced)
   }
 
-  /// The `.label` role: 11px mono, uppercase, wide-tracked, muted.
-  public static let label = mono(11)
+  /// The `.label` role: 13px mono, uppercase, wide-tracked, muted.
+  public static let label = mono(13)
 
-  public static let labelSize: CGFloat = 11
+  public static let labelSize: CGFloat = 13
 }
 
 public enum Tracking {

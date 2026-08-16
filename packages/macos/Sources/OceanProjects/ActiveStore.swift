@@ -50,6 +50,14 @@ public final class ActiveStore {
     }
   }
 
+  public func setActive(_ active: Bool) {
+    if active {
+      startTimer()
+    } else {
+      stopTimer()
+    }
+  }
+
   public func startTimer() {
     stopTimer()
     timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in

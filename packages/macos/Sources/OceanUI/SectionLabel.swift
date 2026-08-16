@@ -7,16 +7,18 @@ public struct SectionLabel: View {
   @Environment(\.palette) private var palette
 
   private let text: String
+  private let size: CGFloat
   private let color: Color?
 
-  public init(_ text: String, color: Color? = nil) {
+  public init(_ text: String, size: CGFloat = 13, color: Color? = nil) {
     self.text = text
+    self.size = size
     self.color = color
   }
 
   public var body: some View {
     Text(text.uppercased())
-      .label()
+      .label(size)
       .foregroundStyle(color ?? palette.textMuted)
   }
 }

@@ -10,21 +10,25 @@ import SwiftUI
 public struct ServerView: View {
   private let onAttachDifferent: (() -> Void)?
   private let onDetach: (() -> Void)?
+  private let onNeedCredentials: ((String) -> Void)?
 
   @State private var connectionStore = ConnectionStore.shared
   @State private var appearance = Appearance.shared
 
   @Environment(\.palette) private var palette
 
-  public init(onAttachDifferent: (() -> Void)? = nil, onDetach: (() -> Void)? = nil) {
+  public init(
+    onAttachDifferent: (() -> Void)? = nil,
+    onDetach: (() -> Void)? = nil,
+    onNeedCredentials: ((String) -> Void)? = nil
+  ) {
     self.onAttachDifferent = onAttachDifferent
     self.onDetach = onDetach
+    self.onNeedCredentials = onNeedCredentials
   }
 
   public var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      headerView
-
       ScrollView {
         VStack(alignment: .leading, spacing: Space.s6) {
           if connectionStore.isConnected {
@@ -55,11 +59,19 @@ public struct ServerView: View {
 
           RuleLine(.section)
 
-          ServerSwitcher { entry in
-            Task {
-              await connectionStore.switchServer(entry.url)
+          ServerSwitcher(onNeedCredentials: onNeedCredentials, onSelectServer: { entry in
+            if connectionStore.savedServer(entry.url) != nil {
+              Task {
+                await connectionStore.switchServer(entry.url)
+              }
+            } else if let onNeedCredentials {
+              onNeedCredentials(entry.url)
+            } else {
+              Task {
+                await connectionStore.switchServer(entry.url)
+              }
             }
-          }
+          })
         }
         .padding(Space.s6)
         .frame(maxWidth: 1100, alignment: .leading)
@@ -67,27 +79,6 @@ public struct ServerView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(palette.bg)
-  }
-
-  private var headerView: some View {
-    VStack(alignment: .leading, spacing: Space.s2) {
-      HStack(spacing: Space.s2) {
-        StatusDot(connectionStore.streamConnected ? .accent : .dim, size: 7)
-        Text(connectionStore.streamConnected ? "LIVE" : "OFFLINE")
-          .mono(11)
-          .tracking(0.12 * 11)
-          .foregroundStyle(palette.textMuted)
-      }
-
-      Text("Server")
-        .font(OceanFont.body(30, weight: .bold))
-        .foregroundStyle(palette.text)
-    }
-    .padding(.horizontal, Space.s6)
-    .padding(.vertical, Space.s4)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(palette.surface)
-    .overlay(alignment: .bottom) { RuleLine(.section) }
   }
 
   private var specSection: some View {

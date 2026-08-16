@@ -104,7 +104,11 @@ public final class FilesStore {
     return total
   }
 
-  public func recomputeTree() {
+  public static func isHiddenSkipped(_ name: String) -> Bool {
+    name.hasPrefix(".") && name != ".gitignore" && name != ".env"
+  }
+
+  public static func computeChangedCounts(statuses: [String: FileChangeStatus], directory: String) -> [String: Int] {
     var counts: [String: Int] = [:]
     for path in statuses.keys {
       var parent = parentOf(path)
@@ -114,6 +118,11 @@ public final class FilesStore {
         parent = parentOf(parent)
       }
     }
+    return counts
+  }
+
+  public func recomputeTree() {
+    let counts = Self.computeChangedCounts(statuses: statuses, directory: directory)
     self.changedCounts = counts
 
     if let matches = matches {
@@ -136,7 +145,7 @@ public final class FilesStore {
     func walk(_ path: String, depth: Int) {
       guard let nodes = levels[path] else { return }
       for node in nodes {
-        if node.name.hasPrefix(".") && node.name != ".gitignore" && node.name != ".env" {
+        if Self.isHiddenSkipped(node.name) {
           continue
         }
         let isDir = node.type == .directory
@@ -183,7 +192,7 @@ public final class FilesStore {
     recomputeTree()
     do {
       let nodes = try await client.listDirectory(path, directory: directory)
-      levels[path] = sortNodes(nodes)
+      levels[path] = Self.sortNodes(nodes)
     } catch {
       expanded.remove(path)
       self.error = error.localizedDescription
@@ -380,13 +389,17 @@ public final class FilesStore {
     return path
   }
 
-  public func parentOf(_ path: String) -> String {
+  public static func parentOf(_ path: String) -> String {
     guard let cut = path.lastIndex(of: "/") else { return "" }
     if cut == path.startIndex { return "/" }
     return String(path[..<cut])
   }
 
-  private func sortNodes(_ nodes: [FileNode]) -> [FileNode] {
+  public func parentOf(_ path: String) -> String {
+    Self.parentOf(path)
+  }
+
+  public static func sortNodes(_ nodes: [FileNode]) -> [FileNode] {
     nodes.sorted { a, b in
       if a.type != b.type {
         return a.type == .directory

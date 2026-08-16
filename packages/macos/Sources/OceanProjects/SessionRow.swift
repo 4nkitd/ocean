@@ -92,6 +92,7 @@ public struct SessionRow: View {
         }
       }
       .overlay(alignment: .bottom) { RuleLine(.row) }
+      .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
   }

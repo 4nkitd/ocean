@@ -110,6 +110,7 @@ public struct QuestionCard: View {
             .overlay(
               Rectangle().strokeBorder(picked ? palette.accent : palette.rule, lineWidth: RuleWidth.section)
             )
+            .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
         }

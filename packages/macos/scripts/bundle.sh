@@ -45,6 +45,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <dict>
     <key>NSAllowsArbitraryLoads</key><true/>
   </dict>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>in.4nkitd.ocean</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>ocean</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST

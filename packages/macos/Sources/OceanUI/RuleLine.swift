@@ -21,6 +21,7 @@ public struct RuleLine: View {
     self.color = color
   }
 
+  /// Note: vertical RuleLine requires a bounded height parent container (e.g. .frame(height: ...)).
   public var body: some View {
     Rectangle()
       .fill(color ?? defaultColor)
