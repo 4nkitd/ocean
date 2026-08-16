@@ -513,7 +513,17 @@ public final class OpenCodeClient: Sendable {
       // v2 keeps a `global` project for anything outside a known root. It is
       // only noise when it has no real directory behind it — when it does, it
       // is the directory the server was started in and belongs on the screen.
-      .filter { !$0.worktree.isEmpty && $0.worktree != "/" }
+      .filter {
+        !$0.worktree.isEmpty && $0.worktree != "/" && !isBenchmarkProjectPath($0.worktree)
+      }
+  }
+
+  private func isBenchmarkProjectPath(_ path: String) -> Bool {
+    let normalized = path.replacingOccurrences(of: "\\", with: "/")
+    return normalized.range(
+      of: #"^/(?:(?:private/)?tmp|(?:private/)?var/tmp|(?:private/)?var/folders/[^/]+/[^/]+/T)/ocbench-[^/]+-\d+$"#,
+      options: .regularExpression
+    ) != nil
   }
 
   public func getCurrentProject(_ directory: String? = nil) async throws -> Project? {
@@ -1011,7 +1021,7 @@ public func isValidServerUrl(_ input: String) -> Bool {
 }
 
 /// `192.168.1.24:4096` — the address without scheme, for display.
-func hostOf(_ rawURL: String) -> String {
+public func hostOf(_ rawURL: String) -> String {
   guard let components = URLComponents(string: rawURL), let host = components.host else {
     return rawURL
   }
@@ -1028,7 +1038,7 @@ func trimTrailingSlashes(_ value: String) -> String {
 }
 
 /// v2 speaks in paths relative to the location; the app speaks in absolute ones.
-func relativeTo(_ root: String, _ path: String) -> String {
+public func relativeTo(_ root: String, _ path: String) -> String {
   let base = root.hasSuffix("/") ? trimTrailingSlashes(root) : root
   let value = path.hasSuffix("/") ? trimTrailingSlashes(path) : path
   if base.isEmpty || base == "/" || value == base { return base == value ? "" : dropLeadingSlashes(value) }
@@ -1036,7 +1046,7 @@ func relativeTo(_ root: String, _ path: String) -> String {
   return dropLeadingSlashes(value)
 }
 
-func absoluteIn(_ root: String, _ path: String) -> String {
+public func absoluteIn(_ root: String, _ path: String) -> String {
   if path.hasPrefix("/") { return path }
   let base = root.hasSuffix("/") ? trimTrailingSlashes(root) : root
   if base.isEmpty { return path }
@@ -1078,11 +1088,11 @@ func lastLine(_ value: String) -> String? {
 }
 
 /// Single-quote for `sh`, which only has to survive an embedded quote.
-func quoteShellArgument(_ value: String) -> String {
+public func quoteShellArgument(_ value: String) -> String {
   "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
-func isCommitHash(_ value: String) -> Bool {
+public func isCommitHash(_ value: String) -> Bool {
   let count = value.count
   guard count >= 4, count <= 40 else { return false }
   return value.allSatisfy(\.isHexDigit)

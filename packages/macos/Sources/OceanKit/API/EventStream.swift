@@ -238,9 +238,18 @@ public actor EventStream {
     set(status: .connected)
 
     var parser = SSEParser()
+    var buf: [UInt8] = []
+    buf.reserveCapacity(8192)
     for try await byte in bytes {
-      for payload in parser.consume(CollectionOfOne(byte)) { deliver(payload) }
-      if Task.isCancelled { throw CancellationError() }
+      buf.append(byte)
+      if byte == 0x0A || buf.count >= 8192 {
+        for payload in parser.consume(buf) { deliver(payload) }
+        buf.removeAll(keepingCapacity: true)
+        if Task.isCancelled { throw CancellationError() }
+      }
+    }
+    if !buf.isEmpty {
+      for payload in parser.consume(buf) { deliver(payload) }
     }
     if let tail = parser.flush() { deliver(tail) }
     throw ApiError(.network, "Event stream closed")

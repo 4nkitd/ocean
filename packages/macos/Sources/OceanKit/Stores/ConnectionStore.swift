@@ -365,15 +365,18 @@ public final class ConnectionStore {
     persistRecents()
   }
 
+  @ObservationIgnored private static let jsonDecoder = JSONDecoder()
+  @ObservationIgnored private static let jsonEncoder = JSONEncoder()
+
   private func loadRecents() -> [RecentServer] {
     guard let body = defaults.data(forKey: Self.recentsKey),
-      let parsed = try? JSONDecoder().decode([RecentServer].self, from: body)
+      let parsed = try? Self.jsonDecoder.decode([RecentServer].self, from: body)
     else { return [] }
     return Array(parsed.prefix(Self.maxRecents))
   }
 
   private func persistRecents() {
-    guard let body = try? JSONEncoder().encode(recents) else { return }
+    guard let body = try? Self.jsonEncoder.encode(recents) else { return }
     defaults.set(body, forKey: Self.recentsKey)
   }
 

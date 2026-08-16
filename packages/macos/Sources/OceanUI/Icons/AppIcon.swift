@@ -53,7 +53,8 @@ public struct AppIcon: View {
   }
 
   public var body: some View {
-    let geometry = IconGeometry.for(name)
+    let cached = IconShape.cache[name]
+    let geometry = cached?.geometry ?? IconGeometry.for(name)
     let scale = min(size / geometry.viewBox.width, size / geometry.viewBox.height)
     Group {
       if filled {
@@ -98,36 +99,50 @@ public struct Spinner: View {
   }
 }
 
+struct CachedIconData {
+  let geometry: IconGeometry
+  let unscaledPath: Path
+}
+
 struct IconShape: Shape {
   let name: IconName
 
+  static let cache: [IconName: CachedIconData] = {
+    var result: [IconName: CachedIconData] = [:]
+    for name in IconName.allCases {
+      let geom = IconGeometry.for(name)
+      var path = Path()
+      if !geom.d.isEmpty {
+        path.addPath(SVGPath.path(from: geom.d))
+      }
+      for circle in geom.circles {
+        path.addEllipse(
+          in: CGRect(
+            x: circle.x - circle.r,
+            y: circle.y - circle.r,
+            width: circle.r * 2,
+            height: circle.r * 2
+          )
+        )
+      }
+      for box in geom.rects {
+        path.addRect(box)
+      }
+      result[name] = CachedIconData(geometry: geom, unscaledPath: path)
+    }
+    return result
+  }()
+
   func path(in rect: CGRect) -> Path {
-    let geometry = IconGeometry.for(name)
-    let box = geometry.viewBox
+    guard let cached = Self.cache[name] else { return Path() }
+    let box = cached.geometry.viewBox
     let scale = min(rect.width / box.width, rect.height / box.height)
     let transform = CGAffineTransform(
       translationX: rect.midX - scale * box.midX,
       y: rect.midY - scale * box.midY
     ).scaledBy(x: scale, y: scale)
 
-    var path = Path()
-    if !geometry.d.isEmpty {
-      path.addPath(SVGPath.path(from: geometry.d))
-    }
-    for circle in geometry.circles {
-      path.addEllipse(
-        in: CGRect(
-          x: circle.x - circle.r,
-          y: circle.y - circle.r,
-          width: circle.r * 2,
-          height: circle.r * 2
-        )
-      )
-    }
-    for box in geometry.rects {
-      path.addRect(box)
-    }
-    return path.applying(transform)
+    return cached.unscaledPath.applying(transform)
   }
 }
 

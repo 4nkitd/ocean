@@ -152,6 +152,7 @@ struct FieldShell<Content: View>: View {
         content()
       }
       .background(palette.surfaceRaised)
+      .clipShape(Rectangle())
       .overlay(Rectangle().strokeBorder(borderColor, lineWidth: RuleWidth.section))
       .overlay {
         if focused {

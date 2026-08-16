@@ -58,7 +58,33 @@ public enum JSONValue: Codable, Hashable, Sendable {
   }
 
   public static func parse(_ data: Data) throws -> JSONValue {
-    try JSONDecoder().decode(JSONValue.self, from: data)
+    let raw = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+    return fromAny(raw)
+  }
+
+  public static func fromAny(_ object: Any) -> JSONValue {
+    if object is NSNull { return .null }
+    if let num = object as? NSNumber {
+      if CFBooleanGetTypeID() == CFGetTypeID(num) {
+        return .bool(num.boolValue)
+      }
+      return .number(num.doubleValue)
+    }
+    if let str = object as? String {
+      return .string(str)
+    }
+    if let arr = object as? [Any] {
+      return .array(arr.map { fromAny($0) })
+    }
+    if let dict = object as? [String: Any] {
+      var obj: [String: JSONValue] = [:]
+      obj.reserveCapacity(dict.count)
+      for (k, v) in dict {
+        obj[k] = fromAny(v)
+      }
+      return .object(obj)
+    }
+    return .null
   }
 
   public func encoded() throws -> Data {
@@ -208,7 +234,7 @@ public struct ConfigEntry: Codable, Hashable, Sendable {
     self.path = path
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let type = json["type"].string else { return nil }
     self.type = type
     path = json["path"].string
@@ -287,7 +313,7 @@ public struct Project: Codable, Hashable, Sendable, Identifiable {
     self.directories = directories
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let id = json["id"].string else { return nil }
     let worktree = json["canonical"].string ?? json["directory"].string ?? ""
     self.id = id
@@ -325,7 +351,7 @@ public struct TokenUsage: Codable, Hashable, Sendable {
     self.cache = cache
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard json.object != nil else { return nil }
     input = json["input"].int
     output = json["output"].int
@@ -1102,7 +1128,7 @@ public struct VcsFileStatus: Codable, Hashable, Sendable, Identifiable {
     self.status = status
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let file = json["file"].string else { return nil }
     self.file = file
     additions = json["additions"].int ?? 0
@@ -1131,7 +1157,7 @@ public struct VcsDiffFile: Codable, Hashable, Sendable, Identifiable {
     self.status = status
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let file = json["file"].string else { return nil }
     self.file = file
     patch = json["patch"].string ?? ""
@@ -1291,7 +1317,7 @@ public struct CommandInfo: Codable, Hashable, Sendable, Identifiable {
     self.subtask = subtask
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let name = json["name"].string else { return nil }
     self.name = name
     description = json["description"].string
@@ -1390,7 +1416,7 @@ public struct PermissionRequest: Codable, Hashable, Sendable, Identifiable {
     self.source = source
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let id = json["id"].string else { return nil }
     self.id = id
     sessionID = json["sessionID"].string ?? ""
@@ -1473,7 +1499,7 @@ public struct QuestionRequest: Codable, Hashable, Sendable, Identifiable {
     self.tool = tool
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let id = json["id"].string else { return nil }
     self.id = id
     sessionID = json["sessionID"].string ?? ""
@@ -1935,7 +1961,7 @@ public struct AgentInfo: Codable, Hashable, Sendable, Identifiable {
     self.hidden = hidden
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let id = json["id"].string else { return nil }
     self.id = id
     name = json["name"].string ?? id
@@ -1989,7 +2015,7 @@ public struct ModelInfo: Codable, Hashable, Sendable, Identifiable {
     self.status = status
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let providerID = json["providerID"].string,
       let id = json["modelID"].string ?? json["id"].string
     else { return nil }
@@ -2038,7 +2064,7 @@ public struct McpServer: Codable, Hashable, Sendable, Identifiable {
     self.error = error
   }
 
-  init?(json: JSONValue) {
+  public init?(json: JSONValue) {
     guard let name = json["name"].string else { return nil }
     self.name = name
     let reported = json["status"]["status"].string ?? ""

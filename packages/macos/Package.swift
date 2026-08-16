@@ -16,7 +16,7 @@ let hasCommandLineToolFrameworks = FileManager.default.fileExists(
 
 let testSwiftSettings: [SwiftSetting] =
   hasCommandLineToolFrameworks
-  ? [.swiftLanguageMode(.v5), .unsafeFlags(["-F", commandLineToolFrameworks, "-enable-experimental-feature", "SymbolLinkageMarkers"])]
+  ? [.swiftLanguageMode(.v5), .unsafeFlags(["-F", commandLineToolFrameworks])]
   : [.swiftLanguageMode(.v5)]
 
 let testLinkerSettings: [LinkerSetting] =
